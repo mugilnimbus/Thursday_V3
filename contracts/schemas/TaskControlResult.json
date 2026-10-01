@@ -1,0 +1,28 @@
+{
+  "$defs": {
+    "PauseState": {
+      "enum": [
+        "none",
+        "pausing",
+        "paused"
+      ],
+      "title": "PauseState",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "pause_state": {
+      "$ref": "#/$defs/PauseState"
+    }
+  },
+  "required": [
+    "id",
+    "pause_state"
+  ],
+  "title": "TaskControlResult",
+  "type": "object"
+}

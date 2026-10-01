@@ -1,0 +1,12 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.kotlin/
+*.jks
+*.keystore
+# Release signing: the key, its password, and the built files.
+keystore.properties
+

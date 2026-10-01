@@ -1,0 +1,19 @@
+[project]
+name = "thursday-tool-server"
+version = "0.1.0"
+description = "Built-in MCP tool server (stdio): files and shell inside one project folder, with sandbox and permission policy enforced here."
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.2.0",
+    "thursday-runtime",
+]
+
+[project.scripts]
+thursday-tool-server = "thursday_tool_server.bootstrap.main:main"
+
+[tool.uv.sources]
+thursday-runtime = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

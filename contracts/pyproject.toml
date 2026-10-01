@@ -1,0 +1,10 @@
+[project]
+name = "thursday-contracts"
+version = "0.1.0"
+description = "Stable, published contracts between Thursday services: event envelope, health, approvals, task-control extension, problem details."
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.11"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

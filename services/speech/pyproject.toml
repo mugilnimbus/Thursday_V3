@@ -1,0 +1,25 @@
+[project]
+name = "thursday-speech"
+version = "0.1.0"
+description = "Local speech for Thursday: speech to text (faster-whisper) and text to speech (Kokoro), both on the CPU."
+requires-python = ">=3.12"
+dependencies = [
+    "av<17",  # faster-whisper 1.2 calls a PyAV option that newer PyAV releases removed
+    "faster-whisper>=1.2.1",
+    "httpx>=0.28.1",
+    "kokoro-onnx>=0.4",
+    "numpy>=2",
+    "thursday-contracts",
+    "thursday-runtime",
+]
+
+[project.scripts]
+thursday-speech = "thursday_speech.bootstrap.main:run"
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

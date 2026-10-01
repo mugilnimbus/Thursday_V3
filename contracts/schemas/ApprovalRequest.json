@@ -1,0 +1,52 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "approval_id": {
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "arguments": {
+      "additionalProperties": true,
+      "title": "Arguments",
+      "type": "object"
+    },
+    "chat_id": {
+      "title": "Chat Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "kind": {
+      "default": "thursday.approval_request",
+      "title": "Kind",
+      "type": "string"
+    },
+    "summary": {
+      "description": "Human-readable description of the action.",
+      "maxLength": 2000,
+      "title": "Summary",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "tool": {
+      "title": "Tool",
+      "type": "string"
+    }
+  },
+  "required": [
+    "approval_id",
+    "task_id",
+    "chat_id",
+    "tool",
+    "summary",
+    "expires_at"
+  ],
+  "title": "ApprovalRequest",
+  "type": "object"
+}

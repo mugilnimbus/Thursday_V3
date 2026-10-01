@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "ProblemCode": {
+      "enum": [
+        "unauthenticated",
+        "not_found",
+        "approval_already_resolved",
+        "task_not_pausable",
+        "invalid_input",
+        "dependency_down",
+        "conflict",
+        "rate_limited"
+      ],
+      "title": "ProblemCode",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/ProblemCode"
+    },
+    "detail": {
+      "default": "",
+      "title": "Detail",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "integer"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "type": {
+      "default": "about:blank",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "status",
+    "code"
+  ],
+  "title": "Problem",
+  "type": "object"
+}

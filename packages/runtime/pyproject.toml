@@ -1,0 +1,19 @@
+[project]
+name = "thursday-runtime"
+version = "0.1.0"
+description = "Shared technical plumbing for Thursday services: settings, data paths, logging, health routes, service-token auth, server startup."
+requires-python = ">=3.12"
+dependencies = [
+    "thursday-contracts",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+]
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

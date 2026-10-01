@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "EventSource": {
+      "enum": [
+        "voice",
+        "main",
+        "collector",
+        "tool"
+      ],
+      "title": "EventSource",
+      "type": "string"
+    }
+  },
+  "description": "Gateway reply to a batch. `last_seq` is the highest contiguous seq stored for the source.",
+  "properties": {
+    "accepted": {
+      "title": "Accepted",
+      "type": "integer"
+    },
+    "duplicates": {
+      "title": "Duplicates",
+      "type": "integer"
+    },
+    "last_seq": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/EventSource"
+      },
+      "title": "Last Seq",
+      "type": "object"
+    }
+  },
+  "required": [
+    "accepted",
+    "duplicates"
+  ],
+  "title": "IngestResult",
+  "type": "object"
+}

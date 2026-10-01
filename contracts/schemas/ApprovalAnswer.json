@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "ApprovalDecision": {
+      "enum": [
+        "allow_once",
+        "allow_always",
+        "deny"
+      ],
+      "title": "ApprovalDecision",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "approval_id": {
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/ApprovalDecision"
+    },
+    "kind": {
+      "default": "thursday.approval_answer",
+      "title": "Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "approval_id",
+    "decision"
+  ],
+  "title": "ApprovalAnswer",
+  "type": "object"
+}

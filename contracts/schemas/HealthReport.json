@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "ServiceName": {
+      "enum": [
+        "gateway",
+        "voice_agent",
+        "main_agent",
+        "metrics_collector",
+        "speech"
+      ],
+      "title": "ServiceName",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "service": {
+      "$ref": "#/$defs/ServiceName"
+    },
+    "uptime_seconds": {
+      "minimum": 0,
+      "title": "Uptime Seconds",
+      "type": "number"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "service",
+    "version",
+    "uptime_seconds"
+  ],
+  "title": "HealthReport",
+  "type": "object"
+}

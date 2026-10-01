@@ -1,0 +1,69 @@
+[project]
+name = "thursday"
+version = "0.1.0"
+description = "Personal agent harness: voice agent, main agent, gateway, tools."
+requires-python = ">=3.12"
+dependencies = [
+    "thursday-contracts",
+    "thursday-runtime",
+    "thursday-launcher",
+    "thursday-gateway",
+    "thursday-voice-agent",
+    "thursday-main-agent",
+    "thursday-metrics-collector",
+    "thursday-tool-server",
+    "thursday-llm",
+    "thursday-speech",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1",
+    "ruff>=0.13",
+    "pyright>=1.1.400",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["contracts", "packages/*", "services/*", "launcher"]
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+thursday-launcher = { workspace = true }
+thursday-gateway = { workspace = true }
+thursday-voice-agent = { workspace = true }
+thursday-main-agent = { workspace = true }
+thursday-metrics-collector = { workspace = true }
+thursday-tool-server = { workspace = true }
+thursday-llm = { workspace = true }
+thursday-speech = { workspace = true }
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF", "S"]
+ignore = [
+    "S101",
+    "ASYNC109",  # shell calls take a per-call timeout on purpose: they kill the process tree on expiry
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["contracts", "packages", "services", "launcher"]
+exclude = ["**/.venv", "**/__pycache__"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["contracts", "packages", "services", "launcher"]
+addopts = "--import-mode=importlib"

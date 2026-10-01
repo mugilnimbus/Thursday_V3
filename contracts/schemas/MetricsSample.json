@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "GpuSample": {
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "util_percent": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Util Percent"
+        },
+        "vram_total_mb": {
+          "title": "Vram Total Mb",
+          "type": "integer"
+        },
+        "vram_used_mb": {
+          "title": "Vram Used Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "name",
+        "vram_used_mb",
+        "vram_total_mb"
+      ],
+      "title": "GpuSample",
+      "type": "object"
+    },
+    "ServiceSample": {
+      "properties": {
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "up": {
+          "title": "Up",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "up"
+      ],
+      "title": "ServiceSample",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "cpu_percent": {
+      "title": "Cpu Percent",
+      "type": "number"
+    },
+    "gpus": {
+      "items": {
+        "$ref": "#/$defs/GpuSample"
+      },
+      "title": "Gpus",
+      "type": "array"
+    },
+    "net_rx_bytes_per_s": {
+      "title": "Net Rx Bytes Per S",
+      "type": "number"
+    },
+    "net_tx_bytes_per_s": {
+      "title": "Net Tx Bytes Per S",
+      "type": "number"
+    },
+    "ram_total_mb": {
+      "title": "Ram Total Mb",
+      "type": "integer"
+    },
+    "ram_used_mb": {
+      "title": "Ram Used Mb",
+      "type": "integer"
+    },
+    "services": {
+      "items": {
+        "$ref": "#/$defs/ServiceSample"
+      },
+      "title": "Services",
+      "type": "array"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ts",
+    "cpu_percent",
+    "ram_used_mb",
+    "ram_total_mb",
+    "net_rx_bytes_per_s",
+    "net_tx_bytes_per_s"
+  ],
+  "title": "MetricsSample",
+  "type": "object"
+}

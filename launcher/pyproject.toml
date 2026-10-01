@@ -1,0 +1,22 @@
+[project]
+name = "thursday-launcher"
+version = "0.1.0"
+description = "Starts Thursday services as native processes, checks health, and restarts crashed services with a delay."
+requires-python = ">=3.12"
+dependencies = [
+    "thursday-contracts",
+    "thursday-runtime",
+    "httpx>=0.28",
+    "psutil>=7.2.2",
+]
+
+[project.scripts]
+thursday = "thursday_launcher.bootstrap.main:main"
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

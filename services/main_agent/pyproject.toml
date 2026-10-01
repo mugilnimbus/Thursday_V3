@@ -1,0 +1,26 @@
+[project]
+name = "thursday-main-agent"
+version = "0.1.0"
+description = "Task execution: agent loop, approvals, step control, context, MCP client."
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-sdk[http-server,sqlite]>=1.2.1",
+    "langgraph>=1.2.12",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "mcp>=2.2.0",
+    "thursday-contracts",
+    "thursday-runtime",
+    "thursday-llm",
+]
+
+[project.scripts]
+thursday-main-agent = "thursday_main_agent.bootstrap.main:run"
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+thursday-llm = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

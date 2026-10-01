@@ -1,0 +1,22 @@
+[project]
+name = "thursday-voice-agent"
+version = "0.1.0"
+description = "Conversational front: talks with the user and delegates tasks to the main agent over A2A."
+requires-python = ">=3.12"
+dependencies = [
+    "thursday-contracts",
+    "thursday-runtime",
+    "thursday-llm",
+]
+
+[project.scripts]
+thursday-voice-agent = "thursday_voice_agent.bootstrap.main:run"
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+thursday-llm = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "ReadinessCheck": {
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "title": "ReadinessCheck",
+      "type": "object"
+    },
+    "ServiceName": {
+      "enum": [
+        "gateway",
+        "voice_agent",
+        "main_agent",
+        "metrics_collector",
+        "speech"
+      ],
+      "title": "ServiceName",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "checks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ReadinessCheck"
+      },
+      "title": "Checks",
+      "type": "object"
+    },
+    "ready": {
+      "title": "Ready",
+      "type": "boolean"
+    },
+    "service": {
+      "$ref": "#/$defs/ServiceName"
+    }
+  },
+  "required": [
+    "service",
+    "ready"
+  ],
+  "title": "ReadinessReport",
+  "type": "object"
+}

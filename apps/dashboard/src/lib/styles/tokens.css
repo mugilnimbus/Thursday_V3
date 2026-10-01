@@ -1,0 +1,92 @@
+/* Global design tokens: iOS-inspired, clean, minimal, with layered depth and neon edges.
+   Scales follow the golden ratio (phi = 1.618) and Fibonacci steps:
+   spacing 4 8 13 21 34 55, radii 8 13 21 34, type 13 16 21 26 34.
+   Split layouts use 1 : phi (38.2% : 61.8%).
+   Depth comes from tinted gradients, edge highlights, and layered shadows, never from
+   grey fills. Effects stay GPU-cheap: no backdrop blur except on overlays. */
+
+:root, :root[data-theme="black"] {
+  --bg: #000000;
+  --text: #f6f3fb;
+  --text-muted: #bdb5cb;
+  --border: #2b2637;
+  --border-strong: #463d5c;
+  --accent: #9b63ff;
+  --accent-bright: #c9a8ff;                     /* text and icons on tinted accent fill */
+  --accent-fill: rgba(155, 99, 255, 0.18);      /* light tinted fill, not a solid block */
+  --accent-soft: rgba(155, 99, 255, 0.12);
+  --success: #72edb0;
+  --warning: #f1c96c;
+  --danger: #ff6d91;
+  --weight-body: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  /* Depth layers */
+  --panel-fill: linear-gradient(155deg, rgba(155,99,255,0.14) 0%, rgba(155,99,255,0.04) 46%, rgba(0,0,0,0) 100%);
+  --edge: inset 0 1px 0 rgba(255,255,255,0.08);
+  --shadow-1: 0 6px 18px -8px rgba(155,99,255,0.28);
+  --shadow-2: 0 18px 44px -14px rgba(155,99,255,0.38);
+  --neon: 0 0 0 1px var(--accent), 0 0 8px rgba(155,99,255,0.6), 0 0 26px rgba(155,99,255,0.32);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --scrim: rgba(0, 0, 0, 0.66);
+  --tile-tint: 34%;                              /* strength of a state tile's glow */
+  --hue-text-mix: 0%;                            /* darken state hues when used as text */
+}
+:root[data-theme="white"] {
+  --bg: #ffffff;
+  --text: #100e16;
+  --text-muted: #4b4557;
+  --border: #d9d2e6;
+  --border-strong: #8d81a6;
+  --accent: #6a2fd0;
+  --accent-bright: #4c1d95;
+  --accent-fill: rgba(106, 47, 208, 0.10);
+  --accent-soft: rgba(106, 47, 208, 0.08);
+  --success: #0f6b41;
+  --warning: #7a4b00;
+  --danger: #a51c40;
+  --weight-body: 500;                            /* heavier body weight keeps text readable on white */
+  --weight-medium: 600;
+  --weight-semibold: 700;
+  --panel-fill: linear-gradient(155deg, #f3edff 0%, #faf7ff 48%, #ffffff 100%);
+  --edge: inset 0 1px 0 rgba(255,255,255,0.9);
+  --shadow-1: 0 1px 2px rgba(40,20,80,0.10), 0 8px 20px -8px rgba(60,30,120,0.20);
+  --shadow-2: 0 2px 4px rgba(40,20,80,0.10), 0 22px 44px -14px rgba(60,30,120,0.30);
+  --neon: 0 0 0 1px var(--accent), 0 0 10px rgba(106,47,208,0.34), 0 6px 22px rgba(106,47,208,0.22);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --scrim: rgba(25, 23, 31, 0.42);
+  --tile-tint: 22%;
+  --hue-text-mix: 14%;
+  --hue-calm: #0d9488; --hue-info: #2563eb; --hue-warm: #d97706;   /* deeper hues stay visible on white */
+  --hue-alert: #e11d48; --hue-growth: #65a30d;
+}
+:root {
+  /* State hues: color carries meaning in visualizations */
+  --hue-calm: #2dd4bf;    /* healthy, good */
+  --hue-info: #4d8dff;    /* neutral information */
+  --hue-warm: #f5b544;    /* attention */
+  --hue-alert: #ff5c8a;   /* problem */
+  --hue-focus: #9b63ff;   /* brand, selection */
+  --hue-growth: #b7e34a;  /* improvement */
+  /* Radii (Fibonacci) */
+  --radius-sm: 8px; --radius-md: 13px; --radius-lg: 21px; --radius-xl: 34px; --radius-pill: 999px;
+  /* Spacing (Fibonacci) */
+  --space-1: 4px; --space-2: 8px; --space-3: 13px; --space-4: 21px; --space-5: 34px; --space-6: 55px;
+  /* Type */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --text-caption: 13px; --text-base: 16px; --text-title: 21px; --text-large: 26px; --text-display: 34px;
+  --line: 1.5;
+  /* Layout */
+  --phi: 1.618;
+  --split-minor: 38.2%; --split-major: 61.8%;
+  --content-max: 987px;
+  /* Controls */
+  --target-min: 44px;
+  --row-height: 55px;
+  /* Motion: transform and opacity only */
+  --dur: 180ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-density="compact"] { --row-height: 44px; --space-3: 8px; --space-4: 13px; }
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }

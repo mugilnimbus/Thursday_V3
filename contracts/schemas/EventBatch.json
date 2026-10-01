@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "EventEnvelope": {
+      "additionalProperties": false,
+      "description": "One event. `project_id` and `chat_id` are absent only for global events such as a model load.",
+      "properties": {
+        "chat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chat Id"
+        },
+        "event_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Event Id",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seq": {
+          "description": "Per-source counter, strictly increasing, for ordering and gap detection.",
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/EventSource"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        }
+      },
+      "required": [
+        "source",
+        "seq",
+        "ts",
+        "type"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "EventSource": {
+      "enum": [
+        "voice",
+        "main",
+        "collector",
+        "tool"
+      ],
+      "title": "EventSource",
+      "type": "string"
+    },
+    "EventType": {
+      "enum": [
+        "user_message",
+        "assistant_message",
+        "delegation",
+        "llm_call",
+        "tool_call",
+        "approval_requested",
+        "approval_resolved",
+        "task_state",
+        "compaction",
+        "model_load",
+        "notification",
+        "error"
+      ],
+      "title": "EventType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "events": {
+      "items": {
+        "$ref": "#/$defs/EventEnvelope"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Events",
+      "type": "array"
+    }
+  },
+  "required": [
+    "events"
+  ],
+  "title": "EventBatch",
+  "type": "object"
+}

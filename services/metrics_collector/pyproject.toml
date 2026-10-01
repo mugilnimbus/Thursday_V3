@@ -1,0 +1,23 @@
+[project]
+name = "thursday-metrics-collector"
+version = "0.1.0"
+description = "Reads PC resources, scrapes service metrics, and pushes them to the gateway."
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "nvidia-ml-py>=13.615.71",
+    "psutil>=7.2.2",
+    "thursday-contracts",
+    "thursday-runtime",
+]
+
+[project.scripts]
+thursday-metrics-collector = "thursday_metrics_collector.bootstrap.main:run"
+
+[tool.uv.sources]
+thursday-contracts = { workspace = true }
+thursday-runtime = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
