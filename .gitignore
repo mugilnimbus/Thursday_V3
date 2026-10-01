@@ -1,0 +1,27 @@
+# Owner-selected unpublished documents and diagrams.
+/docs/private/
+
+# Planning checklist and working notes.
+/.plan/
+
+# Machine-generated test reports, UI review captures, and local diagnostics.
+/.artifacts/
+
+# Generated Python project environments (uv) and tool caches.
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.idea/
+
+# Local secrets. Publish only sanitized example configuration.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dashboard dependencies and build output
+/apps/dashboard/node_modules/
+/apps/dashboard/dist/
+/apps/dashboard/test-results/
+/apps/dashboard/playwright-report/

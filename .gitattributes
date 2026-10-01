@@ -1,0 +1,15 @@
+# Text files are stored with LF in the repository and get the platform's line endings on checkout.
+* text=auto
+
+# Scripts keep the line endings their shell needs on every operating system.
+apps/android/gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files are never converted.
+*.png binary
+*.jar binary
+*.apk binary
+*.bin binary
+*.jks binary
