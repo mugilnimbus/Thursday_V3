@@ -134,7 +134,6 @@ The app never writes keys, and Settings only shows whether each key is set. Afte
 - The services, the dashboard, and the Android app work end to end on Windows 11 and Android 15.
 - Voice is push-to-talk with replies read aloud, on the dashboard and the phone; the first use downloads the speech models (about 0.5 GB for Whisper `small` and 0.35 GB for Kokoro). Continuous listening is not built.
 - On the phone the speaking face moves to a speech-like pattern, not the actual audio; on the dashboard it follows the audio.
-- The voice field's face was derived from a stock picture. Check that picture's licence before publishing this repository, or replace `face-cloud.bin`.
 - Windows and Android are the supported targets for version 1; macOS and Linux may come later.
 
 ## Project structure
