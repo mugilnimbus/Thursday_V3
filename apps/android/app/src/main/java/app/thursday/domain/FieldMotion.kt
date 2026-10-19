@@ -87,15 +87,22 @@ fun breeze(t: Float, think: Float = 0f): Breeze {
 
 /**
  * Where things sit, in pixels.
- * @param lineHeight height of the band along the bottom where the line lives
+ * @param lineHeight height of the band where the line lives
+ * @param lineMid the middle of the line, measured from the top of the field
  * @param scale pixels per face unit; the face is about 2.4 units tall
  */
-class FieldLayout(val lineHeight: Float, val scale: Float, val cx: Float, val cy: Float)
+class FieldLayout(val lineHeight: Float, val lineMid: Float, val scale: Float, val cx: Float, val cy: Float)
 
-fun fieldLayout(width: Float, height: Float, density: Float): FieldLayout {
+/**
+ * `lineCentre` is how far above the bottom of the field the middle of the line is; left out, the line's band rests
+ * on the bottom. A chat lifts it so the line runs behind the status line.
+ */
+fun fieldLayout(width: Float, height: Float, density: Float, lineCentre: Float? = null): FieldLayout {
     val lineHeight = min(height, 72 * density)
-    val scale = max(1f, min(min(280 * density, (height - lineHeight * 0.5f) * 0.31f), width * 0.33f))
-    return FieldLayout(lineHeight, scale, width / 2, max(scale * 1.45f, (height - lineHeight * 0.6f) * 0.5f))
+    val lift = ((lineCentre ?: (lineHeight / 2)) - lineHeight / 2).coerceIn(0f, height - lineHeight) // the band's bottom above the field's
+    val room = height - lift // the face keeps clear of the band, wherever the band is
+    val scale = max(1f, min(min(280 * density, (room - lineHeight * 0.5f) * 0.31f), width * 0.33f))
+    return FieldLayout(lineHeight, room - lineHeight / 2, scale, width / 2, max(scale * 1.45f, (room - lineHeight * 0.6f) * 0.5f))
 }
 
 /** A colour that runs through four stops as t goes from 0 to 1. Stops and result are r, g, b in 0..1. */

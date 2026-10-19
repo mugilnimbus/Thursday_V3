@@ -61,6 +61,10 @@ fun buildChart(values: List<Double?>, zero: Boolean = false, ceiling: Double? = 
     return ChartShape(lines, dots, min, max)
 }
 
+/** How long a model took to start answering: "0.08 s", "2.86 s", "14 s". */
+fun waitText(seconds: Double): String =
+    if (seconds >= 10) "${Math.round(seconds)} s" else "%.2f s".format(java.util.Locale.US, seconds)
+
 fun ago(ms: Long): String {
     val s = maxOf(0, ms / 1000)
     return when {

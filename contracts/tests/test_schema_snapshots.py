@@ -15,6 +15,7 @@ from thursday_contracts.events import EventBatch, EventEnvelope, IngestResult
 from thursday_contracts.health import HealthReport, ReadinessReport
 from thursday_contracts.metrics import MetricsSample
 from thursday_contracts.problems import Problem
+from thursday_contracts.retention import RetentionSetting
 from thursday_contracts.task_control import TaskControlParams, TaskControlResult
 
 SCHEMAS = pathlib.Path(__file__).parents[1] / "schemas"
@@ -30,6 +31,7 @@ MODELS: list[type[BaseModel]] = [
     TaskControlParams,
     TaskControlResult,
     MetricsSample,
+    RetentionSetting,
 ]
 
 

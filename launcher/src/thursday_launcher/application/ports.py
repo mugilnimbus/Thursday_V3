@@ -26,5 +26,11 @@ class HealthProbe(Protocol):
     async def is_healthy(self, spec: ServiceSpec) -> bool: ...
 
 
+class ClosableProbe(HealthProbe, Protocol):
+    """A probe that holds a connection and is closed when a one-off command is done with it."""
+
+    async def aclose(self) -> None: ...
+
+
 class Clock(Protocol):
     def now(self) -> float: ...

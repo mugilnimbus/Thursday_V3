@@ -81,8 +81,10 @@ export function breeze(t: number, think = 0): { x: number; y: number; strength: 
 }
 
 export interface FieldLayout {
-  /** Height of the band along the bottom where the line lives. */
+  /** Height of the band where the line lives. */
   lineHeight: number;
+  /** The middle of the line, measured from the top of the field. */
+  lineMid: number;
   /** How many particles make up the line. */
   lineCount: number;
   /** Pixels per face unit; the face is about 2.4 units tall. */
@@ -92,14 +94,19 @@ export interface FieldLayout {
   cy: number;
 }
 
-export function fieldLayout(width: number, height: number): FieldLayout {
+/** Where things sit. `lineCentre` is how far above the bottom of the field the middle of the line is; left out,
+    the line's band rests on the bottom. A chat lifts it so the line runs behind the status line. */
+export function fieldLayout(width: number, height: number, lineCentre: number | null = null): FieldLayout {
   const lineHeight = Math.min(height, Math.max(64, Math.min(104, 44 + width * 0.032)));
-  const scale = Math.max(1, Math.min(280, (height - lineHeight * 0.5) * 0.31, width * 0.28));
+  const lift = Math.max(0, Math.min(height - lineHeight, (lineCentre ?? lineHeight / 2) - lineHeight / 2)); // the band's bottom above the field's
+  const room = height - lift; // the face keeps clear of the band, wherever the band is
+  const scale = Math.max(1, Math.min(280, (room - lineHeight * 0.5) * 0.31, width * 0.28));
   return {
     lineHeight,
+    lineMid: room - lineHeight / 2,
     lineCount: Math.round(Math.min(280, Math.max(90, width / 3))),
     scale,
     cx: width / 2,
-    cy: Math.max(scale * 1.45, (height - lineHeight * 0.6) * 0.5),
+    cy: Math.max(scale * 1.45, (room - lineHeight * 0.6) * 0.5),
   };
 }

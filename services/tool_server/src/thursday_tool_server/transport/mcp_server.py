@@ -12,22 +12,26 @@ from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any
 
 from mcp.server.elicitation import AcceptedElicitation, CancelledElicitation, ElicitationResult
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.resolve import Elicit, Resolve
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
+from thursday_runtime.call_meta import chat_id_from
 
 from thursday_tool_server.application.audit import CallAudit
 from thursday_tool_server.application.files import FileTools, ToolFailure
 from thursday_tool_server.application.shell_tools import ShellTools
+from thursday_tool_server.domain.deny import refusal, refusal_words
 from thursday_tool_server.domain.policy import Decision, ToolName, decision_for
 from thursday_tool_server.domain.workspace import SandboxViolation
 
 INSTRUCTIONS = (
     "Files and shell inside one project folder. Paths are relative to the project folder; anything outside is "
     "refused. Shell commands and deletes ask the user first; if the user declines or does not answer, the action "
-    "did not happen."
+    "did not happen. Some shell commands are never run and the user is not asked: erasing disks, deleting "
+    "outside the project folder, changing the PC's security settings, and sending, publishing or fetching "
+    "files over the network."
 )
 SUMMARY_LIMIT = 500
 
@@ -40,11 +44,20 @@ def _short(text: str) -> str:
     return text if len(text) <= SUMMARY_LIMIT else text[:SUMMARY_LIMIT] + "..."
 
 
+def _never(command: str) -> None:
+    """A command on the deny list is refused before the user is asked, so it cannot be approved by habit."""
+    reason = refusal(command)
+    if reason is not None:
+        raise ToolError(refusal_words(reason))
+
+
 def ask_shell(command: str) -> Elicit[Approve]:
+    _never(command)
     return Elicit(f"Run shell command: {_short(command)}", Approve)
 
 
 def ask_session_exec(handle: str, command: str) -> Elicit[Approve]:
+    _never(command)
     return Elicit(f"Run in shell session {handle}: {_short(command)}", Approve)
 
 
@@ -71,10 +84,20 @@ class ToolServer:
         self.mcp = MCPServer("thursday-tools", instructions=INSTRUCTIONS, version=version, lifespan=lifespan)
         self._register()
 
+    @staticmethod
+    def _chat(ctx: Context) -> str | None:
+        """The chat this call was made for, sent beside the arguments by the main agent. Recorded, never acted on."""
+        return chat_id_from(ctx.request_context.meta)
+
     async def _audited(
-        self, tool: ToolName, arguments: dict[str, Any], permission: str, action: Callable[[], Awaitable[str]]
+        self,
+        ctx: Context,
+        tool: ToolName,
+        arguments: dict[str, Any],
+        permission: str,
+        action: Callable[[], Awaitable[str]],
     ) -> str:
-        record = self._audit.start(tool.value, arguments, permission)
+        record = self._audit.start(tool.value, arguments, permission, self._chat(ctx))
         try:
             result = await action()
         except (ToolFailure, SandboxViolation) as exc:
@@ -90,15 +113,21 @@ class ToolServer:
         return result
 
     async def _gated(
-        self, tool: ToolName, arguments: dict[str, Any], approval: ApprovalParam, action: Callable[[], Awaitable[str]]
+        self,
+        ctx: Context,
+        tool: ToolName,
+        arguments: dict[str, Any],
+        approval: ApprovalParam,
+        action: Callable[[], Awaitable[str]],
     ) -> str:
         assert decision_for(tool) is Decision.ASK
         if isinstance(approval, AcceptedElicitation) and approval.data.approve:
-            return await self._audited(tool, arguments, "ask:accepted", action)
+            return await self._audited(ctx, tool, arguments, "ask:accepted", action)
+        chat = self._chat(ctx)
         if isinstance(approval, CancelledElicitation):
-            self._audit.finish(self._audit.start(tool.value, arguments, "ask:no_response"), "not_run")
+            self._audit.finish(self._audit.start(tool.value, arguments, "ask:no_response", chat), "not_run")
             return "Not run: the user did not respond in time. Try another approach or ask the user."
-        self._audit.finish(self._audit.start(tool.value, arguments, "ask:declined"), "not_run")
+        self._audit.finish(self._audit.start(tool.value, arguments, "ask:declined", chat), "not_run")
         return "Not run: the user denied this action. Do not retry it; choose another approach or ask the user."
 
     def _register(self) -> None:
@@ -112,8 +141,9 @@ class ToolServer:
             annotations=read_only,
             description="Read a text file with line numbers. offset is the first line (1-based).",
         )
-        async def fs_read(path: str, offset: int = 1, limit: int = 2000) -> str:
+        async def fs_read(ctx: Context, path: str, offset: int = 1, limit: int = 2000) -> str:
             return await self._audited(
+                ctx,
                 ToolName.FS_READ,
                 {"path": path, "offset": offset, "limit": limit},
                 "allow",
@@ -121,9 +151,9 @@ class ToolServer:
             )
 
         @mcp.tool(name=ToolName.FS_LIST, annotations=read_only, description="List a folder (folders end with /).")
-        async def fs_list(path: str = ".") -> str:
+        async def fs_list(ctx: Context, path: str = ".") -> str:
             return await self._audited(
-                ToolName.FS_LIST, {"path": path}, "allow", lambda: asyncio.to_thread(files.list, path)
+                ctx, ToolName.FS_LIST, {"path": path}, "allow", lambda: asyncio.to_thread(files.list, path)
             )
 
         @mcp.tool(
@@ -131,8 +161,9 @@ class ToolServer:
             annotations=writes,
             description="Create or overwrite a text file with the given content (UTF-8).",
         )
-        async def fs_write(path: str, content: str) -> str:
+        async def fs_write(ctx: Context, path: str, content: str) -> str:
             return await self._audited(
+                ctx,
                 ToolName.FS_WRITE,
                 {"path": path, "chars": len(content)},
                 "allow",
@@ -145,8 +176,9 @@ class ToolServer:
             description="Replace old_string with new_string in a file. old_string must match exactly and be "
             "unique unless replace_all is true.",
         )
-        async def fs_edit(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+        async def fs_edit(ctx: Context, path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
             return await self._audited(
+                ctx,
                 ToolName.FS_EDIT,
                 {"path": path, "replace_all": replace_all},
                 "allow",
@@ -158,8 +190,9 @@ class ToolServer:
             annotations=writes,
             description="Apply a unified diff (with @@ hunk headers) to one file.",
         )
-        async def fs_patch(path: str, diff: str) -> str:
+        async def fs_patch(ctx: Context, path: str, diff: str) -> str:
             return await self._audited(
+                ctx,
                 ToolName.FS_PATCH,
                 {"path": path, "diff_chars": len(diff)},
                 "allow",
@@ -173,9 +206,10 @@ class ToolServer:
             "Asks the user first.",
         )
         async def fs_delete(
-            path: str, approval: Annotated[ApprovalParam, Resolve(ask_delete)], recursive: bool = False
+            ctx: Context, path: str, approval: Annotated[ApprovalParam, Resolve(ask_delete)], recursive: bool = False
         ) -> str:
             return await self._gated(
+                ctx,
                 ToolName.FS_DELETE,
                 {"path": path, "recursive": recursive},
                 approval,
@@ -189,9 +223,13 @@ class ToolServer:
             "first. timeout_seconds is capped by the server.",
         )
         async def run_shell(
-            command: str, approval: Annotated[ApprovalParam, Resolve(ask_shell)], timeout_seconds: float | None = None
+            ctx: Context,
+            command: str,
+            approval: Annotated[ApprovalParam, Resolve(ask_shell)],
+            timeout_seconds: float | None = None,
         ) -> str:
             return await self._gated(
+                ctx,
                 ToolName.SHELL,
                 {"command": command, "timeout_seconds": timeout_seconds},
                 approval,
@@ -204,8 +242,8 @@ class ToolServer:
             description="Open a persistent PowerShell session (keeps folder and variables between commands). "
             "Returns a handle for shell.session.exec.",
         )
-        async def session_open() -> str:
-            return await self._audited(ToolName.SHELL_SESSION_OPEN, {}, "allow", shell.open_session)
+        async def session_open(ctx: Context) -> str:
+            return await self._audited(ctx, ToolName.SHELL_SESSION_OPEN, {}, "allow", shell.open_session)
 
         @mcp.tool(
             name=ToolName.SHELL_SESSION_EXEC,
@@ -213,12 +251,14 @@ class ToolServer:
             description="Run a command in an open shell session. Asks the user first.",
         )
         async def session_exec(
+            ctx: Context,
             handle: str,
             command: str,
             approval: Annotated[ApprovalParam, Resolve(ask_session_exec)],
             timeout_seconds: float | None = None,
         ) -> str:
             return await self._gated(
+                ctx,
                 ToolName.SHELL_SESSION_EXEC,
                 {"handle": handle, "command": command},
                 approval,
@@ -226,7 +266,7 @@ class ToolServer:
             )
 
         @mcp.tool(name=ToolName.SHELL_SESSION_CLOSE, annotations=writes, description="Close a shell session.")
-        async def session_close(handle: str) -> str:
+        async def session_close(ctx: Context, handle: str) -> str:
             return await self._audited(
-                ToolName.SHELL_SESSION_CLOSE, {"handle": handle}, "allow", lambda: shell.close_session(handle)
+                ctx, ToolName.SHELL_SESSION_CLOSE, {"handle": handle}, "allow", lambda: shell.close_session(handle)
             )

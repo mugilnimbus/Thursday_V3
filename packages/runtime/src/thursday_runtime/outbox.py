@@ -12,6 +12,7 @@ import json
 import logging
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -105,9 +106,13 @@ class OutboxStore:
 
 
 class EventPublisher:
-    def __init__(self, outbox: OutboxStore, source: EventSource) -> None:
+    """`deleted` says whether a chat was deleted in this service. An event about such a chat is not stored: work
+    that was still running when the chat was deleted must not leave anything of it behind."""
+
+    def __init__(self, outbox: OutboxStore, source: EventSource, deleted: Callable[[str], bool] | None = None) -> None:
         self._outbox = outbox
         self._source = source
+        self._deleted = deleted
         self.wakeup = asyncio.Event()
 
     def publish(
@@ -119,6 +124,9 @@ class EventPublisher:
         chat_id: str | None = None,
         task_id: str | None = None,
     ) -> int:
+        """Returns the event's number, or 0 when it was dropped because its chat was deleted."""
+        if chat_id is not None and self._deleted is not None and self._deleted(chat_id):
+            return 0
         capped = cap_payload(payload)
 
         def build(seq: int) -> str:

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture model</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<header class="top">
+  <h1 id="title">Architecture</h1>
+  <nav id="crumbs" class="crumbs" aria-label="How deep the diagram is opened"></nav>
+  <div class="top-actions">
+    <input id="search" type="search" placeholder="Find a part  /" aria-label="Find a part">
+    <button id="gaps" class="btn" type="button"></button>
+    <button id="shot" class="btn" type="button" title="Save the open level as a PNG picture">Save picture</button>
+    <button id="fit" class="btn" type="button" title="Switch between fitting everything on screen and actual size (0)">Actual size</button>
+  </div>
+</header>
+<main class="stage">
+  <section class="canvas-wrap" id="wrap">
+    <canvas id="canvas" tabindex="0" aria-label="Architecture diagram. Use the outline on the right to reach every part by keyboard."></canvas>
+    <div class="legend" id="legend" aria-label="Connection types"></div>
+    <div class="hint" id="hint">Scroll to open one level deeper · drag or Shift + scroll to move · double-click a box to open or close it</div>
+    <div class="zoom" role="group" aria-label="Level"><button id="zin" class="btn" type="button" aria-label="One level deeper" title="One level deeper (+)">+</button><button id="zout" class="btn" type="button" aria-label="One level up" title="One level up (-)">−</button></div>
+    <div class="flowbar">
+      <label for="flow">Walk a flow</label>
+      <select id="flow"></select>
+      <button id="prev" class="btn" type="button" aria-label="Previous step">Back</button>
+      <button id="next" class="btn" type="button" aria-label="Next step">Next</button>
+      <span id="step" class="step"></span>
+    </div>
+  </section>
+  <aside class="panel" id="panel" aria-live="polite"></aside>
+</main>
+<script src="model.js"></script>
+<script src="viewer.js"></script>
+</body>
+</html>

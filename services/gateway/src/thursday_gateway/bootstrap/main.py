@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from datetime import timedelta
 from pathlib import Path
 
 import uvicorn
@@ -17,34 +16,40 @@ from thursday_runtime.auth import ServiceTokenAuth
 from thursday_runtime.health import build_health_router
 from thursday_runtime.log_setup import configure_logging
 from thursday_runtime.paths import log_dir, service_data_dir
-from thursday_runtime.serve import LOCALHOST
+from thursday_runtime.serve import KEEP_ALIVE_SECONDS, LOCALHOST
 from thursday_runtime.settings import CommonSettings, env_file
+from thursday_runtime.sqlite_care import compact_all
 
 from thursday_gateway import __version__
 from thursday_gateway.application.backup import BackupService, BackupSettings
 from thursday_gateway.application.control import TaskControl
 from thursday_gateway.application.deletion import DeletionSaga
+from thursday_gateway.application.devices import DeviceService
 from thursday_gateway.application.hub import Hub
+from thursday_gateway.application.ingest import EventIngest
 from thursday_gateway.application.projects import ProjectService
 from thursday_gateway.application.relay import MessageRelay
+from thursday_gateway.application.retention import Retention
 from thursday_gateway.application.status import DependencyStatus
+from thursday_gateway.application.talk_warmup import TalkWarmup
 from thursday_gateway.infrastructure.agents import MainAgentClient, VoiceAgentClient
+from thursday_gateway.infrastructure.backup_client import ServiceBackups
+from thursday_gateway.infrastructure.device_store import DeviceStore
 from thursday_gateway.infrastructure.metrics_store import MetricsStore
+from thursday_gateway.infrastructure.read_model import ReadModel
+from thursday_gateway.infrastructure.speech_client import SpeechClient
 from thursday_gateway.infrastructure.store import Store
 from thursday_gateway.infrastructure.tailnet import TailnetAddress
 from thursday_gateway.transport.admin_api import build_admin_router
-from thursday_gateway.transport.api import (
-    Services,
-    build_client_router,
-    build_ingest_router,
-    install_error_handlers,
-    metrics_stream,
-    stream,
-)
+from thursday_gateway.transport.api import build_client_router
 from thursday_gateway.transport.device_auth import DeviceAuth, trusted_local
 from thursday_gateway.transport.devices_api import build_claim_router, build_devices_router, build_pairing_router
+from thursday_gateway.transport.errors import install_error_handlers
+from thursday_gateway.transport.ingest_api import build_ingest_router
 from thursday_gateway.transport.local_guard import LocalGuard
-from thursday_gateway.transport.speech_api import SpeechClient, build_speech_router
+from thursday_gateway.transport.services import Services
+from thursday_gateway.transport.speech_api import build_speech_router
+from thursday_gateway.transport.streams import metrics_stream, stream
 
 SERVICE = ServiceName.GATEWAY
 log = logging.getLogger(__name__)
@@ -55,7 +60,6 @@ class GatewaySettings(CommonSettings):
         env_file=env_file(), env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
     )
 
-    trace_retention_days: int = Field(default=30, ge=1)
     metrics_retention_days: int = Field(default=7, ge=1)
     backup_dir: str = ""
     backup_daily: bool = False
@@ -65,36 +69,61 @@ class GatewaySettings(CommonSettings):
     gateway_public_url: str = ""  # this PC's tailnet HTTPS address; found with `tailscale status` when empty
 
 
-def build_services(settings: GatewaySettings, data_dir: Path) -> Services:
-    store = Store(data_dir / "gateway.sqlite")
+def assemble(
+    store: Store,
+    main: MainAgentClient,
+    voice: VoiceAgentClient,
+    *,
+    retention_defaults: dict[str, int],
+    metrics: MetricsStore | None = None,
+    backup: BackupService | None = None,
+) -> Services:
+    """Connect the gateway's logic to its storage and its clients. This is the one place that knows which class
+    sits behind each port; tests call it with stand-in clients."""
     hub = Hub()
-    main = MainAgentClient(f"http://{LOCALHOST}:{settings.main_agent_port}", settings.thursday_service_token)
-    voice = VoiceAgentClient(f"http://{LOCALHOST}:{settings.voice_agent_port}", settings.thursday_service_token)
-    projects = ProjectService(store)
-    relay = MessageRelay(store, projects, voice, hub)
+    read = ReadModel(store)
+    relay = MessageRelay(store, voice, hub)
     return Services(
+        projects=ProjectService(store),
+        relay=relay,
+        control=TaskControl(read, main),
+        deletion=DeletionSaga(store, main, voice),
+        status=DependencyStatus(store, main, voice, relay, hub),
+        devices=DeviceService(DeviceStore(store)),
+        ingest=EventIngest(store, hub),
+        retention=Retention(store, store, metrics, retention_defaults, {"main agent": main, "voice agent": voice}),
+        read=read,
+        main=main,
+        hub=hub,
+        metrics=metrics,
+        backup=backup,
+        voice=voice,
+    )
+
+
+def build_services(settings: GatewaySettings, data_dir: Path) -> Services:
+    # Before anything opens them: gives back the space that pruned rows left.
+    compact_all([data_dir / "gateway.sqlite", data_dir / "metrics.sqlite"])
+    store = Store(data_dir / "gateway.sqlite")
+    agents = {
+        "main_agent": f"http://{LOCALHOST}:{settings.main_agent_port}",
+        "voice_agent": f"http://{LOCALHOST}:{settings.voice_agent_port}",
+    }
+    token = settings.thursday_service_token
+    return assemble(
         store,
-        projects,
-        relay,
-        TaskControl(store, main),
-        DeletionSaga(store, main, voice),
-        DependencyStatus(store, main, voice, relay, hub),
-        main,
-        hub,
-        MetricsStore(data_dir / "metrics.sqlite"),
+        MainAgentClient(agents["main_agent"], token),
+        VoiceAgentClient(agents["voice_agent"], token),
+        retention_defaults=retention_defaults(settings),
+        metrics=MetricsStore(data_dir / "metrics.sqlite"),
         backup=BackupService(
             store,
             [data_dir / "gateway.sqlite"],
-            {
-                "main_agent": f"http://{LOCALHOST}:{settings.main_agent_port}",
-                "voice_agent": f"http://{LOCALHOST}:{settings.voice_agent_port}",
-            },
-            settings.thursday_service_token,
+            ServiceBackups(agents, token),
             BackupSettings(
                 folder=settings.backup_dir, daily=settings.backup_daily, keep_copies=settings.backup_keep_copies
             ),
         ),
-        voice=voice,
     )
 
 
@@ -102,14 +131,14 @@ def create_local_app(s: Services, settings: GatewaySettings) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         stop = asyncio.Event()
-        leftovers = s.store.purge_orphans()
+        leftovers = s.retention.remove_orphans()
         if leftovers:
             log.info("removed %d rows that belonged to deleted chats or projects", leftovers)
         loops = [
             asyncio.create_task(s.relay.run(stop), name="relay"),
             asyncio.create_task(s.deletion.run(stop), name="deletion"),
             asyncio.create_task(s.status.run(stop), name="status"),
-            asyncio.create_task(_retention(s, settings, stop), name="retention"),
+            asyncio.create_task(s.retention.run(stop), name="retention"),
             *([asyncio.create_task(s.backup.run_daily(stop), name="backup")] if s.backup else []),
         ]
         try:
@@ -123,11 +152,12 @@ def create_local_app(s: Services, settings: GatewaySettings) -> FastAPI:
     app.include_router(build_health_router(SERVICE, __version__))
     app.include_router(build_client_router(s, trusted_local))
     app.include_router(build_ingest_router(s, ServiceTokenAuth(settings.thursday_service_token)))
-    app.include_router(build_admin_router(s, trusted_local, retention_defaults(settings)))
+    app.include_router(build_admin_router(s, trusted_local))
     app.include_router(build_pairing_router(s.devices, TailnetAddress(settings.gateway_public_url)))
     app.include_router(build_claim_router(s.devices))
     app.include_router(build_devices_router(s.devices, trusted_local))
-    app.include_router(build_speech_router(speech_client(settings), trusted_local))
+    speech = speech_client(settings)
+    app.include_router(build_speech_router(speech, trusted_local, s.voice, TalkWarmup(speech, s.voice)))
 
     @app.websocket("/v1/stream")
     async def ws(websocket: WebSocket, after: int = 0, chat_id: str | None = None) -> None:
@@ -142,8 +172,8 @@ def create_local_app(s: Services, settings: GatewaySettings) -> FastAPI:
         return {
             "clients_connected": s.hub.count,
             "monitor_clients": s.metrics_hub.count,
-            "queued_messages": len(s.store.query("select 1 from outgoing where status = 'queued'")),
-            "pending_approvals": len(s.store.query("select 1 from approvals where status = 'pending'")),
+            "queued_messages": s.read.queued_count(),
+            "pending_approvals": s.read.pending_approval_count(),
             "voice_reachable": s.relay.voice_reachable,
         }
 
@@ -163,10 +193,11 @@ def create_proxy_app(s: Services) -> FastAPI:
     )
     install_error_handlers(app)
     app.include_router(build_client_router(s, devices))
-    app.include_router(build_admin_router(s, devices, retention_defaults(GatewaySettings())))
+    app.include_router(build_admin_router(s, devices))
     app.include_router(build_claim_router(s.devices))  # no token yet: the code is the credential
     app.include_router(build_devices_router(s.devices, devices))
-    app.include_router(build_speech_router(speech_client(GatewaySettings()), devices))
+    speech = speech_client(GatewaySettings())
+    app.include_router(build_speech_router(speech, devices, s.voice, TalkWarmup(speech, s.voice)))
 
     @app.websocket("/v1/stream")
     async def ws(websocket: WebSocket, after: int = 0, chat_id: str | None = None) -> None:
@@ -185,21 +216,9 @@ def speech_client(settings: GatewaySettings) -> SpeechClient:
 
 def retention_defaults(settings: GatewaySettings) -> dict[str, int]:
     return {
-        "trace_retention_days": settings.trace_retention_days,
+        "data_retention_days": settings.data_retention_days,
         "metrics_retention_days": settings.metrics_retention_days,
     }
-
-
-async def _retention(s: Services, settings: GatewaySettings, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        days = {**retention_defaults(settings), **(s.store.get_setting("retention") or {})}
-        removed = s.store.prune_events(timedelta(days=days["trace_retention_days"]))
-        if s.metrics is not None:
-            s.metrics.prune(timedelta(days=days["metrics_retention_days"]))
-        if removed:
-            log.info("retention removed %d old events", removed)
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=3600)
 
 
 def create_app() -> FastAPI:
@@ -222,6 +241,7 @@ def run() -> None:
             port=settings.gateway_localhost_port,
             log_level=level,
             access_log=False,
+            timeout_keep_alive=KEEP_ALIVE_SECONDS,
         )
     )
     proxy = uvicorn.Server(
@@ -231,6 +251,7 @@ def run() -> None:
             port=settings.gateway_proxy_port,
             log_level=level,
             access_log=False,
+            timeout_keep_alive=KEEP_ALIVE_SECONDS,
         )
     )
 

@@ -1,16 +1,24 @@
 <!doctype html>
-<!-- Development page for the voice field: switch between its states without a chat or a model.
+<!-- Development page for the voice field: switch between its states without a chat or a model, with or
+     without sample messages lying over it (styled by the app's own stylesheets).
      Served only by the dev server (npm run dev) at /dev/voicefield.html; it is not part of the build. -->
 <html lang="en" data-theme="black">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Voice field</title>
+    <link rel="stylesheet" href="/src/lib/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/lib/styles/components.css" />
+    <link rel="stylesheet" href="/src/lib/styles/app.css" />
     <style>
       html, body { height: 100%; margin: 0; }
       body { display: grid; grid-template-rows: minmax(0, 1fr) auto; background: #0b0b12; color: #e8e6f2; font: 14px/1.4 system-ui, sans-serif; }
       :root[data-theme='white'] body { background: #ffffff; color: #1a1a24; }
+      .stage { display: grid; min-height: 0; }
+      .stage > * { grid-area: 1 / 1; min-height: 0; }
       canvas { display: block; width: 100%; height: 100%; min-height: 0; }
+      .stage .chat { display: grid; overflow-y: auto; }
+      .stage .thread { display: grid; align-content: start; padding: 24px; max-width: 1100px; width: 100%; margin: 0 auto; box-sizing: border-box; }
       .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; padding: 12px 16px; }
       button { font: inherit; color: inherit; background: transparent; border: 1px solid #6c5ce7; border-radius: 999px; padding: 6px 14px; cursor: pointer; }
       button[aria-pressed='true'] { background: #6c5ce7; color: #fff; }
@@ -18,7 +26,25 @@
     </style>
   </head>
   <body>
-    <canvas id="field" aria-hidden="true"></canvas>
+    <div class="stage">
+      <canvas id="field" aria-hidden="true"></canvas>
+      <section class="chat" id="sample" hidden>
+        <div class="thread">
+          <div class="msg">The <code>pyproject.toml</code> file tells Python how the project is built and what it needs.<span class="meta">Voice agent · 12:44 AM</span></div>
+          <div class="msg user">what is that toml file..?<span class="meta">You · 12:44 AM</span></div>
+          <div class="msg">It lists the libraries the project depends on, and which tools build it. Every tool that works on the project reads it first.<span class="meta">Voice agent · 12:44 AM</span></div>
+          <div class="msg user">Okayy<span class="meta">You · 12:44 AM</span></div>
+          <article class="task">
+            <div class="task-head"><span class="dot ok"></span><strong>List the files in this project</strong></div>
+            <ol class="timeline"><li class="tl-ok"><span>Listed the folder</span><span class="t">0.4 s</span></li><li class="tl-ok"><span>Read pyproject.toml</span><span class="t">0.2 s</span></li></ol>
+            <div class="task-result">There are 28 checkpoint files and nine scripts.</div>
+          </article>
+          <div class="approval" role="alertdialog"><strong>Approval needed · delete old.log</strong><div class="actions"><span class="btn sm">Allow once</span><span class="btn sm">Deny</span></div></div>
+          <div class="msg">Perfect. Let me know if you have any questions about what is inside the file.<span class="meta">Voice agent · 12:44 AM</span></div>
+          <div class="msg user">hiii.<span class="meta">You · 12:45 AM</span></div>
+        </div>
+      </section>
+    </div>
     <div class="bar">
       <button data-state="idle">Idle</button>
       <button data-state="listening">Listening</button>
@@ -26,6 +52,8 @@
       <button data-state="speaking">Speaking</button>
       <button id="cycle" aria-pressed="false">Play a conversation</button>
       <button id="face" aria-pressed="true">Face</button>
+      <button id="messages" aria-pressed="false">Messages</button>
+      <label>See-through <input id="clear" type="range" min="0" max="100" step="10" value="0" style="width:110px;vertical-align:middle" /></label>
       <button id="mic" aria-pressed="false">Use my microphone</button>
       <button id="theme">Light / dark</button>
       <span class="note" id="note" role="status"></span>
@@ -104,6 +132,16 @@
         engine.setFace(on);
       });
 
+      const sample = document.getElementById('sample');
+      function messages(on) {
+        sample.hidden = !on;
+        document.getElementById('messages').setAttribute('aria-pressed', String(on));
+      }
+      document.getElementById('messages').addEventListener('click', () => messages(sample.hidden));
+      // The same custom property Settings, Appearance sets in the app: 1 is solid, 0 is clear.
+      const seeThrough = (percent) => document.documentElement.style.setProperty('--msg-solid', String(1 - percent / 100));
+      document.getElementById('clear').addEventListener('input', (event) => seeThrough(Number(event.currentTarget.value)));
+
       document.getElementById('theme').addEventListener('click', () => {
         const root = document.documentElement;
         root.dataset.theme = root.dataset.theme === 'white' ? 'black' : 'white';
@@ -111,7 +149,8 @@
 
       const wanted = new URLSearchParams(location.search).get('state');
       show(['idle', 'listening', 'thinking', 'speaking'].includes(wanted) ? wanted : 'thinking');
-      window.voiceField = { show, face: (on) => engine.setFace(on) };
+      messages(new URLSearchParams(location.search).has('messages'));
+      window.voiceField = { show, face: (on) => engine.setFace(on), messages, seeThrough };
     </script>
   </body>
 </html>

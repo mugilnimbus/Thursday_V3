@@ -13,6 +13,8 @@ export interface Chat {
   created_at: string;
   last_activity: string;
   project_id?: string;
+  /** Every message in this chat goes straight to the main agent (set on the PC, so every device agrees). */
+  direct?: boolean;
 }
 
 export interface ChatMessage {
@@ -22,6 +24,8 @@ export interface ChatMessage {
   text: string;
   created_at: string;
   client_message_id: string | null;
+  /** A user message that was sent straight to the main agent. */
+  direct?: boolean;
 }
 
 export interface PendingMessage {
@@ -29,6 +33,7 @@ export interface PendingMessage {
   text: string;
   status: 'queued' | 'delivered' | 'failed';
   error: string;
+  direct?: boolean;
 }
 
 export type EventType =
@@ -66,7 +71,7 @@ export interface TimelineMessage {
 export type StreamMessage =
   | TimelineMessage
   | { kind: 'chat_delta'; chat_id: string; client_message_id: string; text: string }
-  | { kind: 'outgoing'; chat_id: string; client_message_id: string; status: string; text?: string; error?: string }
+  | { kind: 'outgoing'; chat_id: string; client_message_id: string; status: string; text?: string; error?: string; direct?: boolean }
   | { kind: 'status_banner'; banners: Banner[] }
   | { kind: 'catalog_changed' };
 
@@ -136,6 +141,11 @@ export interface ServiceSample {
   metrics: Record<string, number | string | boolean | null>;
 }
 
+export interface StorageSample {
+  name: string;
+  bytes: number;
+}
+
 export interface MetricsSample {
   ts: string;
   cpu_percent: number;
@@ -145,6 +155,8 @@ export interface MetricsSample {
   net_tx_bytes_per_s: number;
   gpus: GpuSample[];
   services: ServiceSample[];
+  /** How much disk each service's stored data uses; absent from samples made before this was measured. */
+  storage?: StorageSample[];
 }
 
 /** One successful model call, from the gateway's event history. */
@@ -164,19 +176,79 @@ export interface LoadParams {
   offload_kv_cache_to_gpu: boolean | null;
   eval_batch_size: number | null;
   num_experts: number | null;
+  /** Built-in llama.cpp only: layers whose expert weights stay in system RAM. */
+  moe_cpu_layers: number | null;
+  /** Built-in llama.cpp only: 'all' or how many layers go on the graphics cards; null lets llama.cpp fit what it can. */
+  gpu_layers: string | null;
+  /** Built-in llama.cpp only: share of the model per card, like '3,1'; null splits by free memory. */
+  gpu_split: string | null;
+  /** Built-in llama.cpp only: the card filled first ('0', or an order like '1,0'); null spreads the model over the cards. */
+  gpu_priority: string | null;
+}
+
+export interface InferenceParams {
+  temperature: number | null;
+  top_p: number | null;
+  max_output_tokens: number | null;
+  /** 'default', or for llama.cpp 'off' | 'on', or for Responses endpoints an effort (none … xhigh). */
+  reasoning: string;
+}
+
+export interface ModelEntry {
+  key: string;
+  loaded: boolean;
+  max_context_length: number | null;
+  trained_for_tool_use: boolean | null;
+  size_bytes: number | null;
+  /** A multimodal projector found beside the model file (built-in llama.cpp). */
+  projector: string | null;
 }
 
 export interface LlmSettings {
-  provider: 'lmstudio' | 'openai_compatible';
+  provider: 'lmstudio' | 'openai_compatible' | 'llamacpp';
   base_url: string;
   model: string;
   load: LoadParams;
+  inference: InferenceParams;
+  /** Built-in llama.cpp: whether `thursday setup` has installed it, the models folder, and the GPU to use. */
+  llamacpp: {
+    installed: boolean;
+    models_dir: string;
+    gpu: number | null;
+    /** The graphics cards llama.cpp sees, once it has been asked. */
+    devices?: { index: number; name: string; total_mb: number }[];
+    /** How the loaded model was placed on the cards when they are filled in order, in words. */
+    placement?: string;
+  };
+  /** Tokens of conversation sent before the older part is shortened; null leaves it to the agent. */
+  compact_at_tokens: number | null;
+  /** The model and address each other provider used last, brought back when the agent switches to it. */
+  remembered?: Partial<Record<LlmSettings['provider'], { model?: string; base_url?: string }>>;
+  /** A loaded model unused for this many minutes is unloaded; 0 keeps it loaded. */
+  idle_unload_minutes: number;
+  /** Seconds since the loaded model was last used; null when nothing is loaded. */
+  idle_seconds: number | null;
+  hears_audio: boolean;
   api_key_set: boolean;
-  api_key_source: string | null;
+  /** A key is stored, but for another address: it is not sent until it is typed again. */
+  api_key_held_back?: boolean;
   sends_data_off_pc: boolean;
   supports_lifecycle: boolean;
   loaded: { context_length: number | null; adopted: boolean; load_seconds: number | null } | null;
   reachable?: boolean;
+}
+
+/** The settings an agent card can change; a null clears the saved value, so the .env value applies again. */
+export interface LlmChange {
+  provider?: LlmSettings['provider'];
+  base_url?: string;
+  model?: string;
+  load?: Partial<LoadParams>;
+  inference?: Partial<InferenceParams>;
+  models_dir?: string | null;
+  gpu?: number | null;
+  compact_at_tokens?: number | null;
+  idle_unload_minutes?: number | null;
 }
 
 export interface PromptVersion {
@@ -188,7 +260,8 @@ export interface PromptVersion {
 export interface GeneralSettings {
   compaction_threshold_percent?: number;
   keep_awake_paused_minutes?: number;
-  trace_retention_days: number;
+  /** Days that working data is kept; 0 keeps it until it is deleted by hand. */
+  data_retention_days: number;
   metrics_retention_days: number;
   main_agent_reachable: boolean;
 }

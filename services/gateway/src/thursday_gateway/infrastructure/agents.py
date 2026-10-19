@@ -5,6 +5,7 @@ Voice agent: the internal chat API, one streamed turn per user message (NDJSON l
 """
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -12,17 +13,34 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 from thursday_contracts.approvals import APPROVAL_ANSWER_KIND
+from thursday_contracts.retention import RETENTION_PATH
 from thursday_contracts.task_control import EXTENSIONS_HEADER, TASK_CONTROL_EXTENSION_URI
 
+from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
 
-class AgentUnavailable(Exception):
-    """The agent could not be reached."""
+log = logging.getLogger(__name__)
+_DROPPED = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
 
 
-class AgentRefused(Exception):
-    def __init__(self, code: int, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+async def _ready(client: httpx.AsyncClient, base: str, who: str) -> dict[str, Any] | None:
+    """The agent's readiness report, or None when it does not give one in time.
+
+    A connection kept open since the last check can have been closed by the agent in the meantime: it restarted,
+    or it closed the connection in the very moment it is used again (the services keep an unused connection
+    longer than their callers do, so that this does not happen between two checks; see `thursday_runtime.serve`).
+    A closed connection says nothing about the agent, so the question is asked once more, on a new one. Every
+    miss is logged with its kind, so a false alarm can be told from an agent that really stopped.
+    """
+    for attempt in (1, 2):
+        try:
+            return (await client.get(f"{base}/ready", timeout=3)).json()
+        except _DROPPED as exc:
+            if attempt == 2:
+                log.info("the %s dropped two readiness checks (%s)", who, type(exc).__name__)
+        except (httpx.HTTPError, ValueError) as exc:
+            log.info("the %s did not answer a readiness check (%s)", who, type(exc).__name__)
+            return None
+    return None
 
 
 class MainAgentClient:
@@ -76,12 +94,13 @@ class MainAgentClient:
         except httpx.HTTPError as exc:
             raise AgentUnavailable(f"main agent unreachable ({type(exc).__name__})") from exc
 
+    async def set_retention(self, days: int) -> None:
+        response = await self.management("PUT", RETENTION_PATH, json={"days": days})
+        if response.status_code >= 400:
+            raise AgentRefused(response.status_code, f"main agent answered {response.status_code}")
+
     async def ready(self) -> dict[str, Any] | None:
-        try:
-            response = await self._client.get(f"{self._base}/ready", timeout=3)
-        except httpx.HTTPError:
-            return None
-        return response.json()
+        return await _ready(self._client, self._base, "main agent")
 
 
 class VoiceAgentClient:
@@ -106,6 +125,26 @@ class VoiceAgentClient:
         except httpx.HTTPError as exc:
             raise AgentUnavailable(f"voice agent unreachable ({type(exc).__name__})") from exc
 
+    async def direct(self, chat_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Start a task from the user's words, unchanged, without the voice model. Raises AgentUnavailable when the
+        voice agent or the main agent cannot be reached (the message stays queued) and AgentRefused when the task
+        was refused (the message fails with the reason)."""
+        try:
+            response = await self._client.post(
+                f"{self._base}/v1/chats/{chat_id}/direct", json=body, headers=self._headers
+            )
+        except httpx.HTTPError as exc:
+            raise AgentUnavailable(f"voice agent unreachable ({type(exc).__name__})") from exc
+        if response.status_code >= 500:
+            raise AgentUnavailable(f"voice agent answered {response.status_code}")
+        if response.status_code >= 400:
+            try:
+                detail = str(response.json().get("detail", ""))
+            except ValueError:
+                detail = response.text
+            raise AgentRefused(response.status_code, detail[:300] or f"HTTP {response.status_code}")
+        return response.json()
+
     async def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Management calls (LLM settings, prompts, model lifecycle)."""
         try:
@@ -114,6 +153,19 @@ class VoiceAgentClient:
             )
         except httpx.HTTPError as exc:
             raise AgentUnavailable(f"voice agent unreachable ({type(exc).__name__})") from exc
+
+    async def hear(self, wav: bytes) -> dict[str, Any] | None:
+        """What the voice model itself hears in a WAV clip, or None when it cannot (then speech-to-text is used)."""
+        try:
+            response = await self._client.post(f"{self._base}/v1/hear", headers=self._headers, content=wav, timeout=120)
+        except httpx.HTTPError:
+            return None
+        return response.json() if response.status_code == 200 else None
+
+    async def set_retention(self, days: int) -> None:
+        response = await self.request("PUT", RETENTION_PATH, json={"days": days})
+        if response.status_code >= 400:
+            raise AgentRefused(response.status_code, f"voice agent answered {response.status_code}")
 
     async def delete_chat(self, chat_id: str) -> None:
         try:
@@ -124,8 +176,4 @@ class VoiceAgentClient:
             raise AgentRefused(response.status_code, "voice agent refused the delete")
 
     async def ready(self) -> dict[str, Any] | None:
-        try:
-            response = await self._client.get(f"{self._base}/ready", timeout=3)
-        except httpx.HTTPError:
-            return None
-        return response.json()
+        return await _ready(self._client, self._base, "voice agent")

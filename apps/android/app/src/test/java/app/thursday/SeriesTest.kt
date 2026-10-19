@@ -4,6 +4,7 @@ import app.thursday.domain.TimedValue
 import app.thursday.domain.ago
 import app.thursday.domain.buildChart
 import app.thursday.domain.slots
+import app.thursday.domain.waitText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -48,5 +49,10 @@ class SeriesTest {
     @Test
     fun agesReadNaturally() {
         assertEquals(listOf("5 s ago", "3 min ago", "2 h ago"), listOf(ago(5000), ago(180_000), ago(7_200_000)))
+    }
+
+    @Test
+    fun theWaitForAFirstTokenIsGivenToAHundredthOfASecondAndInWholeSecondsFromTen() {
+        assertEquals(listOf("0.08 s", "0.40 s", "2.86 s", "14 s"), listOf(waitText(0.081), waitText(0.4), waitText(2.862), waitText(14.4)))
     }
 }

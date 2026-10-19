@@ -118,7 +118,8 @@ class PersistentShell:
     """A long-lived PowerShell process; each command runs in the same session scope.
 
     Commands are sent base64-encoded on one line and end with a unique marker carrying
-    `$LASTEXITCODE`, so multi-line commands and state (cwd, variables) work.
+    `$LASTEXITCODE`, so multi-line commands and state (cwd, variables) work. A PowerShell error that
+    stops the command (`throw`, a missing command) sets no exit code of its own, so it is reported as 1.
     """
 
     def __init__(self, process: asyncio.subprocess.Process) -> None:
@@ -144,7 +145,8 @@ class PersistentShell:
             line = (
                 f"$global:LASTEXITCODE = 0; try {{ Invoke-Expression ([Text.Encoding]::UTF8.GetString("
                 f"[Convert]::FromBase64String('{encoded}'))) 2>&1 | Out-String -Stream }} "
-                f'catch {{ $_ | Out-String -Stream }}; Write-Output "{marker}$LASTEXITCODE"'
+                f"catch {{ $_ | Out-String -Stream; if ($LASTEXITCODE -eq 0) {{ $global:LASTEXITCODE = 1 }} }}; "
+                f'Write-Output "{marker}$LASTEXITCODE"'
             )
             await self._send(line)
             buffer = CappedBuffer(output_limit)

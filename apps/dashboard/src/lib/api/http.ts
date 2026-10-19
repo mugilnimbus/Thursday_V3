@@ -22,6 +22,7 @@ async function send<T>(method: string, path: string, body?: unknown, timeoutMs =
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
+  let text = '';
   try {
     response = await fetch(path, {
       method,
@@ -32,14 +33,15 @@ async function send<T>(method: string, path: string, body?: unknown, timeoutMs =
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
+    // The answer is read inside the time limit too: a reply that starts and then stalls must not wait for ever.
+    if (response.status !== 204) text = await response.text();
   } catch (error) {
-    const aborted = error instanceof DOMException && error.name === 'AbortError';
+    const aborted = controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
     throw new ApiError(0, aborted ? 'timeout' : 'offline', aborted ? 'The request timed out.' : 'Cannot reach Thursday.');
   } finally {
     clearTimeout(timer);
   }
   if (response.status === 204) return undefined as T;
-  const text = await response.text();
   const data = text ? safeJson(text) : undefined;
   if (!response.ok) {
     const problem = (data ?? {}) as { code?: string; detail?: string; title?: string };

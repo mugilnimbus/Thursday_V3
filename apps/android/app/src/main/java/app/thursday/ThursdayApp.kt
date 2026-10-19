@@ -29,15 +29,29 @@ class Prefs(context: Context) {
     var appLock: Boolean
         get() = prefs.getBoolean("app_lock", false)
         set(v) = prefs.edit().putBoolean("app_lock", v).apply()
+    /** Whether pressing Allow on an approval card asks for the fingerprint or lock-screen credential first. */
+    var approvalCheck: Boolean
+        get() = prefs.getBoolean("approval_check", true)
+        set(v) = prefs.edit().putBoolean("approval_check", v).apply()
     var speakReplies: Boolean
         get() = prefs.getBoolean("speak_replies", false)
         set(v) = prefs.edit().putBoolean("speak_replies", v).apply()
     var faceAnimation: Boolean
         get() = prefs.getBoolean("face_animation", true)
         set(v) = prefs.edit().putBoolean("face_animation", v).apply()
+    /** How see-through the messages in a chat are, 0 to 100 percent. 0 is solid, which is easiest to read. */
+    var messageTransparency: Int
+        get() = prefs.getInt("message_transparency", 0).coerceIn(0, 100)
+        set(v) = prefs.edit().putInt("message_transparency", v.coerceIn(0, 100)).apply()
     var traceGroup: String
         get() = prefs.getString("trace_group", "chat") ?: "chat"
         set(v) = prefs.edit().putString("trace_group", v).apply()
+    var traceNewestFirst: Boolean
+        get() = prefs.getBoolean("trace_newest_first", true)
+        set(v) = prefs.edit().putBoolean("trace_newest_first", v).apply()
+    var traceStepsLastFirst: Boolean
+        get() = prefs.getBoolean("trace_steps_last_first", false)
+        set(v) = prefs.edit().putBoolean("trace_steps_last_first", v).apply()
     var theme: String
         get() = prefs.getString("theme", "black") ?: "black"
         set(v) = prefs.edit().putString("theme", v).apply()

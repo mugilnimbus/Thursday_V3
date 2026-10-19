@@ -77,6 +77,7 @@ class AppState {
   retryNow(): void {
     this.loadError = null;
     this.statusPoll.refresh();
+    if (this.started && !this.loaded) void this.loadAll();
   }
 
   async loadAll(): Promise<void> {
@@ -171,6 +172,21 @@ class AppState {
     for (const list of Object.values(this.chats)) {
       const chat = list.find((c) => c.chat_id === chatId);
       if (chat) chat.title = renamed.title;
+    }
+  }
+
+  /** Turn "send straight to the main agent" on or off for a chat. Shown at once, and put back if the PC says no. */
+  async setChatDirect(chatId: string, direct: boolean): Promise<void> {
+    const chat = this.chat(chatId)?.chat;
+    if (!chat) return;
+    const before = chat.direct ?? false;
+    chat.direct = direct;
+    try {
+      const saved = await api.setDirect(chatId, direct);
+      chat.direct = saved.direct ?? direct;
+    } catch (error) {
+      chat.direct = before;
+      this.toast(errorText(error), 'bad');
     }
   }
 

@@ -1,11 +1,13 @@
 import json
 import logging
 
+import httpx
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from thursday_contracts.health import ReadinessCheck, ServiceName
+from thursday_runtime import serve
 from thursday_runtime.auth import ServiceTokenAuth
 from thursday_runtime.health import build_health_router
 from thursday_runtime.log_setup import JsonLineFormatter
@@ -76,6 +78,15 @@ def test_log_lines_are_json_with_context_fields() -> None:
     record.chat_id = "c1"
     line = json.loads(JsonLineFormatter("gateway").format(record))
     assert line["msg"] == "hello world" and line["chat_id"] == "c1" and line["service"] == "gateway"
+
+
+def test_a_service_keeps_an_unused_connection_longer_than_its_callers_do(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: dict[str, object] = {}
+    monkeypatch.setattr(serve.uvicorn, "run", lambda app, **options: started.update(options))
+    serve.serve(FastAPI(), 8799)
+    assert started["host"] == "127.0.0.1"
+    callers_keep = httpx.Limits().keepalive_expiry
+    assert callers_keep is not None and started["timeout_keep_alive"] > callers_keep  # type: ignore[operator]
 
 
 def test_configured_data_root_wins(tmp_path) -> None:

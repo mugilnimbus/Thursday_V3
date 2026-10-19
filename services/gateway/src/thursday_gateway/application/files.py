@@ -1,7 +1,8 @@
 """Read-only views of the PC's folders for the clients.
 
 Two uses, both read-only:
-- picking a folder for a new project: list the sub-folders of a folder (names only), starting at the drives;
+- picking a folder (for a new project, or the models folder of the built-in llama.cpp): list the sub-folders of a
+  folder (names only), starting at the drives, with shortcuts to where LM Studio keeps its models;
 - looking inside a project: list a folder, search file names, and preview a text file.
 
 Project views never leave the project folder: every path is resolved (following links) and must still
@@ -9,6 +10,7 @@ be inside the folder. Nothing here writes, and file contents are capped and retu
 """
 
 import os
+import stat
 import string
 import sys
 from dataclasses import dataclass
@@ -41,14 +43,37 @@ def roots() -> list[str]:
     return ["/"]
 
 
+def is_hidden(item: os.DirEntry[str], windows: bool = sys.platform == "win32") -> bool:
+    """What the operating system itself hides. On Windows that is the hidden or system mark, not a leading dot:
+    `.lmstudio` is an ordinary folder there, and File Explorer shows it. Elsewhere a leading dot hides."""
+    if not windows:
+        return item.name.startswith(".")
+    marks = getattr(item.stat(follow_symlinks=False), "st_file_attributes", 0)
+    return bool(marks & (stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM))
+
+
+def model_folders(home: Path | None = None) -> list[dict[str, str]]:
+    """Folders where another program on this PC keeps downloaded model files, offered as shortcuts when a models
+    folder is being chosen. Only the ones that exist. LM Studio keeps them under a dot folder, which is hidden from
+    folder lists on Linux and macOS, so a shortcut is the way in there."""
+    home = home or Path.home()
+    known = (
+        ("LM Studio's models", home / ".lmstudio" / "models"),
+        ("LM Studio's models (older location)", home / ".cache" / "lm-studio" / "models"),
+    )
+    return [{"name": name, "path": str(path)} for name, path in known if path.is_dir()]
+
+
 def list_folders(path: str) -> dict[str, object]:
-    """Sub-folders of an absolute folder, for the project folder picker. An empty path lists the drives."""
+    """Sub-folders of an absolute folder, for choosing a folder on the PC. An empty path lists the drives.
+    Folders the operating system hides are left out; a path typed by hand still opens them."""
     if not path.strip():
         return {
             "path": "",
             "parent": None,
             "folders": [{"name": r, "path": r} for r in roots()],
             "home": str(Path.home()),
+            "model_folders": model_folders(),
         }
     folder = Path(path)
     if not folder.is_absolute():
@@ -61,7 +86,7 @@ def list_folders(path: str) -> dict[str, object]:
         with os.scandir(folder) as scan:
             for item in scan:
                 try:
-                    if item.is_dir() and not item.name.startswith(("$", ".")):
+                    if item.is_dir() and not item.name.startswith("$") and not is_hidden(item):
                         names.append(item.name)
                 except OSError:
                     continue
@@ -74,6 +99,7 @@ def list_folders(path: str) -> dict[str, object]:
         "parent": parent,
         "folders": [{"name": n, "path": str(folder / n)} for n in names[:MAX_ENTRIES]],
         "home": str(Path.home()),
+        "model_folders": model_folders(),
     }
 
 

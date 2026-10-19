@@ -158,4 +158,15 @@ class FieldTest {
         assertEquals(610f, layout.cx, 0f)
         assertTrue(layout.scale * 2.4f < 2200f && layout.scale * 2.8f < 1220f)
     }
+
+    @Test
+    fun theLineRestsOnTheBottomOrIsLiftedToWhereItIsAskedToRun() {
+        val resting = fieldLayout(1220f, 2200f, 3f)
+        assertEquals(2200f - resting.lineHeight / 2, resting.lineMid, 0f)
+        val lifted = fieldLayout(1220f, 2200f, 3f, lineCentre = 300f) // the middle of the line 300 px above the bottom
+        assertEquals(1900f, lifted.lineMid, 0f)
+        assertTrue("the face moves up with it, clear of the band", lifted.cy < resting.cy)
+        assertEquals("never lower than resting on the bottom", resting.lineMid, fieldLayout(1220f, 2200f, 3f, lineCentre = 10f).lineMid, 0f)
+        assertEquals("never above the field", resting.lineHeight / 2, fieldLayout(1220f, 2200f, 3f, lineCentre = 9000f).lineMid, 0f)
+    }
 }

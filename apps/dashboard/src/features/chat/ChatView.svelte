@@ -8,6 +8,7 @@
   import { voiceIO } from '../../lib/state/voice.svelte';
   import Icon from '../../lib/ui/Icon.svelte';
   import Markdown from '../../lib/ui/Markdown.svelte';
+  import CopyButton from '../../lib/ui/CopyButton.svelte';
   import VoiceField from '../../lib/ui/VoiceField.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import Composer from './Composer.svelte';
@@ -17,7 +18,9 @@
   let { session }: { session: ChatSession } = $props();
 
   let thread: HTMLDivElement;
+  let view: HTMLElement;
   let pinned = true;
+  let lineCentre = $state<number | null>(null);
 
   const found = $derived(app.chat(session.chatId));
   const approvals = $derived(app.approvals.filter((a) => a.chat_id === session.chatId));
@@ -25,17 +28,40 @@
   const orphans = $derived(approvals.filter((a) => !taskIds.has(a.task_id)));
   const replies = $derived(Object.entries(session.replies));
   const voiceDown = $derived(app.status?.voice_agent === false);
+  const direct = $derived(found?.chat.direct ?? false);
 
   // The particle field shows the microphone while you talk and the reply while it is read aloud.
   const fieldState = $derived(voiceIO.mode === 'recording' ? 'listening' : voiceIO.mode === 'playing' ? 'speaking' : voiceIO.mode === 'transcribing' ? 'thinking' : session.voice);
 
   $effect(() => {
-    session.onReply = (text) => voiceIO.say(text);
+    // A reply is read as it is written; one that arrives whole (a task's result) is read once it is here.
+    session.onReplyPart = (id, part) => voiceIO.sayPart(id, part);
+    session.onReply = (text, id) => {
+      if (!(id && voiceIO.sayEnd(id))) voiceIO.say(text);
+    };
     return () => {
       session.onReply = null;
+      session.onReplyPart = null;
       voiceIO.cancelRecording();
       voiceIO.stopSpeaking();
     };
+  });
+
+  // The particle line runs along the status line, which sits on the message box: wherever the box's height puts
+  // the status line, the field is told how far above its own bottom that is.
+  $effect(() => {
+    const status = view.querySelector<HTMLElement>('.telemetry');
+    const field = view.querySelector<HTMLElement>('.voicefield');
+    const box = view.querySelector<HTMLElement>('.composer');
+    if (!status || !field || !box) return;
+    const measure = () => {
+      const line = status.getBoundingClientRect();
+      lineCentre = Math.round(field.getBoundingClientRect().bottom - (line.top + line.height / 2));
+    };
+    const observer = new ResizeObserver(measure);
+    for (const element of [view, status, box]) observer.observe(element);
+    measure();
+    return () => observer.disconnect();
   });
 
   function onScroll() {
@@ -53,23 +79,24 @@
     if (app.connection === 'live') session.retryUnsent();
   });
 
-  function outgoingMeta(status: string, error: string): string {
+  function outgoingMeta(status: string, error: string, straight: boolean): string {
+    const tag = straight ? ' · direct' : '';
     switch (status) {
       case 'sending':
-        return 'Sending…';
+        return `Sending…${tag}`;
       case 'queued':
-        return voiceDown ? 'Queued · sends when the voice agent is back' : 'Queued';
+        return (voiceDown ? 'Queued · sends when the voice agent is back' : 'Queued') + tag;
       case 'delivered':
-        return 'Delivered';
+        return `Delivered${tag}`;
       case 'unsent':
         return 'Not sent · cannot reach Thursday';
       default:
-        return `Failed · ${error || 'the voice agent refused it'}`;
+        return `Failed · ${error || (straight ? 'the main agent refused it' : 'the voice agent refused it')}`;
     }
   }
 </script>
 
-<section class="view chat on" aria-label="Chat">
+<section class="view chat on" aria-label="Chat" bind:this={view} style:--line-centre={lineCentre === null ? null : `${lineCentre}px`}>
   <div class="thread" bind:this={thread} onscroll={onScroll} aria-live="polite">
     {#each app.banners as banner (banner.code)}
       <div class="banner" role="alert"><Icon name="alert" /><span class="grow">{banner.text}</span></div>
@@ -97,7 +124,7 @@
       {#each session.items as item (item.key)}
         {#if item.kind === 'message'}
           <div class="msg" class:user={item.message.role === 'user'}>
-            {#if item.message.role === 'user'}{item.message.text}{:else}<Markdown text={item.message.text} />{/if}<span class="meta">{item.message.role === 'user' ? 'You' : 'Voice agent'} · {clockTime(item.message.created_at)}</span>
+            {#if item.message.role === 'user'}{item.message.text}{:else}<Markdown text={item.message.text} />{/if}<span class="meta">{item.message.role === 'user' ? (item.message.direct ? 'You · direct' : 'You') : 'Voice agent'} · {clockTime(item.message.created_at)}<CopyButton text={item.message.text} /></span>
           </div>
         {:else}
           <TaskCard task={item.task} />
@@ -111,7 +138,7 @@
       {/each}
       {#each session.outgoing as out (out.clientMessageId)}
         <div class="msg user">
-          {out.text}<span class="meta">{outgoingMeta(out.status, out.error)}</span>
+          {out.text}<span class="meta">{outgoingMeta(out.status, out.error, out.direct)}<CopyButton text={out.text} /></span>
           {#if out.status === 'unsent' || out.status === 'failed'}
             <button class="btn sm" style="margin-top:6px" onclick={() => session.retry(out.clientMessageId)}>Retry</button>
           {/if}
@@ -125,7 +152,14 @@
       {/if}
     {/if}
   </div>
-  <VoiceField state={fieldState} analyser={voiceIO.analyser} sampleRate={voiceIO.sampleRate} face={prefs.voiceFace} />
+  <!-- The face lies behind the messages; the particle line is drawn over them and lets them show through. -->
+  <VoiceField state={fieldState} analyser={voiceIO.analyser} sampleRate={voiceIO.sampleRate} face={prefs.voiceFace} {lineCentre} parts="face" />
+  <VoiceField state={fieldState} analyser={voiceIO.analyser} sampleRate={voiceIO.sampleRate} {lineCentre} parts="line" />
   <Telemetry {session} />
-  <Composer chatId={session.chatId} onsend={(text) => ((pinned = true), session.send(text))} />
+  <Composer
+    chatId={session.chatId}
+    {direct}
+    onsend={(text) => ((pinned = true), voiceIO.warmVoice(), session.send(text))}
+    ondirect={(on) => app.setChatDirect(session.chatId, on)}
+  />
 </section>

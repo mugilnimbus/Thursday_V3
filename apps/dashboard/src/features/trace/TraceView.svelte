@@ -1,5 +1,9 @@
-<!-- Every task, searchable, and one task's full trace: steps, tool calls, approvals, compaction. -->
+<!-- Every task, searchable, and one task's full trace: steps, tool calls, approvals, compaction.
+     Wide: the list and the trace sit side by side and scroll separately, so a clicked task is always in view.
+     Narrow (one column): the list and the trace take turns; a task opens its trace, and Back returns to the
+     list where it was left. -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import { api } from '../../lib/api/gateway';
   import type { TaskRow, TimelineMessage } from '../../lib/api/types';
   import { Poller } from '../../lib/live/poll';
@@ -7,7 +11,7 @@
   import { router } from '../../lib/state/router.svelte';
   import { buildTrace, isTerminal } from '../../lib/state/timeline';
   import Icon from '../../lib/ui/Icon.svelte';
-  import { groupTasks, type GroupBy, type Order } from './grouping';
+  import { groupTasks, orderSteps, type GroupBy, type Order, type StepOrder } from './grouping';
   import Markdown from '../../lib/ui/Markdown.svelte';
   import StepCard from './StepCard.svelte';
 
@@ -17,6 +21,7 @@
   let q = $state('');
   let groupBy = $state<GroupBy>(readChoice('thursday.traceGroup', ['chat', 'project', 'none'], 'chat'));
   let order = $state<Order>(readChoice('thursday.traceOrder', ['newest', 'oldest'], 'newest'));
+  let stepOrder = $state<StepOrder>(readChoice('thursday.traceStepOrder', ['first', 'last'], 'first'));
   let closed = $state<Record<string, boolean>>({});
 
   // The grouping and order are remembered in this browser.
@@ -37,9 +42,31 @@
   }
   let tasks = $state<TaskRow[] | null>(null);
   let listError = $state('');
-  let detail = $state<{ task: TaskRow; trace: TimelineMessage[] } | null>(null);
+  let detail = $state<{ task: TaskRow; trace: TimelineMessage[]; omitted?: number } | null>(null);
   let detailError = $state('');
   let showSummary = $state<Record<number, boolean>>({});
+  let layout = $state<HTMLElement | null>(null);
+  /** Where the task list was scrolled to when a task was opened in the one-column layout. */
+  let listScroll = 0;
+
+  const scroller = () => layout?.closest('.viewport') ?? null;
+  const oneColumn = () => !!layout && getComputedStyle(layout).gridTemplateColumns.split(' ').length === 1;
+
+  function open(id: string) {
+    if (oneColumn()) listScroll = scroller()?.scrollTop ?? 0;
+    router.go({ name: 'trace', taskId: id });
+  }
+
+  // A newly opened trace starts at its top; going back to the list returns to where the list was.
+  $effect(() => {
+    const id = taskId;
+    void tick().then(() => {
+      const view = scroller();
+      if (!view) return;
+      if (id) view.scrollTop = 0;
+      else if (oneColumn()) view.scrollTop = listScroll;
+    });
+  });
 
   const groups = $derived(groupTasks(tasks ?? [], groupBy, order));
   const selected = $derived(taskId ?? tasks?.[0]?.task_id ?? null);
@@ -83,6 +110,8 @@
 
   const events = $derived(detail?.trace.map((m) => m.event) ?? []);
   const steps = $derived(buildTrace(events));
+  const shownSteps = $derived(orderSteps(steps, stepOrder));
+  const lastNo = $derived(steps.at(-1)?.no);
   const facts = $derived.by(() => {
     if (!detail) return null;
     const llm = events.filter((e) => e.type === 'llm_call' && e.payload.agent === 'main');
@@ -123,7 +152,7 @@
 </script>
 
 <section class="view page on" aria-label="Trace">
-  <div class="trace-layout">
+  <div class="trace-layout" class:has-task={!!taskId} bind:this={layout}>
     <div class="task-list">
       <input class="input" type="search" placeholder="Search tasks" aria-label="Search tasks" bind:value={q} />
       <div class="seg" style="justify-self:start">
@@ -154,7 +183,7 @@
           {/if}
           {#if !closed[group.key]}
             {#each group.tasks as t (t.task_id)}
-          <button class="task-item" aria-current={selected === t.task_id ? 'true' : undefined} onclick={() => router.go({ name: 'trace', taskId: t.task_id })}>
+          <button class="task-item" aria-current={selected === t.task_id ? 'true' : undefined} onclick={() => open(t.task_id)}>
             <span class="t1"><span class="dot {DOT[t.state] ?? ''}"></span><span>{t.instruction || 'Task'}</span></span>
             <small>{STATE[t.state] ?? t.state}{groupBy !== 'chat' && t.chat_title ? ` · ${t.chat_title}` : ''} · {when(t)}</small>
           </button>
@@ -166,7 +195,8 @@
       {/if}
     </div>
 
-    <div class="stack" style="gap:var(--space-4);min-width:0">
+    <div class="stack trace-detail" style="gap:var(--space-4);min-width:0">
+      <button class="btn plain trace-back" onclick={() => router.go({ name: 'trace', taskId: null })}><Icon name="back" />All tasks</button>
       {#if detailError}
         <div class="card stack"><h3>Could not load this trace</h3><p class="muted-text" style="margin:0">{detailError}</p></div>
       {:else if detail && facts}
@@ -186,23 +216,44 @@
           </div>
         </div>
 
+        {#snippet marker(step: (typeof steps)[number])}
+          {#if step.compactedBefore}
+            {@const c = step.compactedBefore}
+            <div class="marker">
+              Earlier turns summarised · {c.estimated_tokens_before} → {c.estimated_tokens_after} tokens ·
+              <button class="btn plain" style="min-height:28px;padding:0 6px;color:var(--accent-bright)" onclick={() => (showSummary[step.no] = !showSummary[step.no])}>{showSummary[step.no] ? 'hide' : 'view'} summary</button>
+            </div>
+            {#if showSummary[step.no]}<pre class="code wrap">{c.summary}</pre>{/if}
+          {/if}
+        {/snippet}
+        {#snippet result()}
+          {#if detail?.task.summary}
+            <div class="card answer"><Markdown text={detail.task.summary} /><span class="caption">Final result, sent to the voice agent</span></div>
+          {/if}
+        {/snippet}
+
         <div class="steps-v">
-          {#each steps as step, i (step.no)}
-            {#if step.compactedBefore}
-              {@const c = step.compactedBefore}
-              <div class="marker">
-                Earlier turns summarised · {c.estimated_tokens_before} → {c.estimated_tokens_after} tokens ·
-                <button class="btn plain" style="min-height:28px;padding:0 6px;color:var(--accent-bright)" onclick={() => (showSummary[step.no] = !showSummary[step.no])}>{showSummary[step.no] ? 'hide' : 'view'} summary</button>
-              </div>
-              {#if showSummary[step.no]}<pre class="code wrap">{c.summary}</pre>{/if}
-            {/if}
-            <StepCard {step} open={i < 2 || !isTerminal(detail.task.state)} final={i === steps.length - 1 && !step.tools.length && detail.task.state === 'completed'} />
+          {#if steps.length > 1}
+            <div class="trace-sort">
+              <span class="caption">{steps.length} steps</span>
+              <button class="btn plain mini" aria-label="Order of the steps" title="Change the order of the steps" onclick={() => ((stepOrder = stepOrder === 'first' ? 'last' : 'first'), remember('thursday.traceStepOrder', stepOrder))}>
+                {stepOrder === 'first' ? 'First to last' : 'Last to first'}
+              </button>
+            </div>
+          {/if}
+          {#if detail.omitted}
+            <p class="caption">This task is very long. Its start and its end are shown; {detail.omitted} events in between are left out.</p>
+          {/if}
+          <!-- Last to first reads from the result back to the start, so the result and each summary marker move too. -->
+          {#if stepOrder === 'last'}{@render result()}{/if}
+          {#each shownSteps as step, i (step.no)}
+            {#if stepOrder === 'first'}{@render marker(step)}{/if}
+            <StepCard {step} open={i < 2 || !isTerminal(detail.task.state)} final={step.no === lastNo && !step.tools.length && detail.task.state === 'completed'} />
+            {#if stepOrder === 'last'}{@render marker(step)}{/if}
           {:else}
             <p class="caption">No model steps recorded yet.</p>
           {/each}
-          {#if detail.task.summary}
-            <div class="card answer"><Markdown text={detail.task.summary} /><span class="caption">Final result, sent to the voice agent</span></div>
-          {/if}
+          {#if stepOrder === 'first'}{@render result()}{/if}
         </div>
       {:else if selected}
         <div class="card stack"><div class="skeleton"></div><div class="skeleton" style="width:60%"></div></div>

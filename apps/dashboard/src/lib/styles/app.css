@@ -1,6 +1,9 @@
-/* Thursday dashboard layout and feature styles, ported from the approved wireframe
-   (docs/wireframes/dashboard.html). Tokens and shared components come from tokens.css and components.css. */
+/* Thursday dashboard layout and feature styles. Tokens and shared components come from tokens.css and
+   components.css. */
 html, body { margin: 0; height: 100%; }
+/* nothing shows a scrollbar; every scrolling area still scrolls by wheel, touch, drag and keys */
+* { scrollbar-width: none; -ms-overflow-style: none; }
+*::-webkit-scrollbar { display: none; }
 body { background: var(--bg); color: var(--text); font: var(--weight-body) var(--text-base)/var(--line) var(--font); overflow: hidden; }
 #app { height: 100%; }
 [hidden] { display: none !important; }
@@ -77,7 +80,14 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .chat .thread > * { min-width: 0; }
   .chat .thread { overflow-y: auto; padding: var(--space-4) 2px var(--space-3); gap: var(--space-3); min-height: 0; }
   .msg { max-width: min(1100px, 72%); }
-  .msg .meta { display: block; margin-top: 4px; font-size: var(--text-caption); color: var(--text-muted); }
+  .msg .meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: var(--text-caption); color: var(--text-muted); }
+  /* copy: a quiet icon beside what it copies; it turns into a tick for a moment */
+  .copy { display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; margin: -5px 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; transition: color var(--dur), background var(--dur); }
+  .copy:hover, .copy:focus-visible { color: var(--accent-bright); background: var(--accent-soft); }
+  .copy.done { color: var(--success); }
+  .code-block { position: relative; display: grid; min-width: 0; }
+  .code-block .copy { position: absolute; top: 5px; right: 5px; margin: 0; background: var(--bg); border: 1px solid var(--border); }
+  .task-actions { display: flex; align-items: center; gap: var(--space-2); }
   .task { border: 0; background: transparent; box-shadow: none; padding: 0 0 0 var(--space-2); display: grid; gap: var(--space-2); max-width: min(1100px, 100%); }
   .task-head { display: flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 2px 6px 2px 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); justify-self: start; max-width: 100%; }
   .task-head:hover .task-chev { color: var(--accent-bright); }
@@ -92,8 +102,11 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .timeline { list-style: none; margin: 0 0 0 6px; padding: 0; display: grid; gap: 6px; border-left: 2px solid var(--border-strong); }
   .timeline li { position: relative; padding-left: var(--space-3); font-size: var(--text-caption); display: flex; gap: var(--space-2); align-items: baseline; color: var(--text); }
   .timeline li::before { content: ""; position: absolute; left: -6px; top: .45em; width: 10px; height: 10px; border-radius: 50%; background: var(--bg); border: 2px solid var(--border-strong); }
-  .timeline li.tl-ok::before { border-color: var(--success); } .timeline li.tl-warn::before { border-color: var(--warning); }
-  .timeline li.tl-run::before { border-color: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  /* A step's dot is solid: purple and pulsing while it runs, then green (worked), orange (needs a look) or red (failed). */
+  .timeline li.tl-ok::before { border-color: var(--success); background: var(--success); }
+  .timeline li.tl-warn::before { border-color: var(--warning); background: var(--warning); }
+  .timeline li.tl-run::before { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .timeline li.tl-run::before { animation: none; } }
   .timeline .t { color: var(--text-muted); margin-left: auto; font-family: var(--font-mono); white-space: nowrap; }
   .chat .composer { align-items: center; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: var(--neon); padding-left: var(--space-2); }
   .chat .composer textarea { padding: 10px 0; }
@@ -123,7 +136,8 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .now .grow { font-size: var(--text-caption); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .telemetry { margin: 0; padding: 0 var(--space-2); background: transparent; border: 0; font-size: var(--text-caption); line-height: 1.4; color: var(--text-muted); text-align: center; font-variant-numeric: tabular-nums; }
   .telemetry b { font-weight: var(--weight-semibold); color: var(--text); }
-  .telemetry .sep { opacity: .5; margin: 0 .5em; }
+  .telemetry .sep { opacity: .6; margin: 0 .2em; }
+  .telemetry .agent { white-space: nowrap; }
   .telemetry .off-pc { color: var(--danger); font-weight: var(--weight-semibold); }
   .composer textarea { font-size: var(--text-base); }
   .banner { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border: 1px solid var(--warning); border-radius: var(--radius-md); color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); font-size: var(--text-caption); font-weight: var(--weight-medium); }
@@ -152,7 +166,9 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
 
   /* trace */
   .trace-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-  .task-list { position: sticky; top: 0; display: grid; gap: var(--space-2); }
+  /* the list scrolls by itself beside the trace, so opening a task far down the list still shows its trace */
+  .task-list { position: sticky; top: 0; display: grid; gap: var(--space-2); align-content: start; max-height: calc(100dvh - 52px - var(--space-4)); overflow-y: auto; }
+  .trace-back { display: none; justify-self: start; }
   .task-item { display: grid; gap: 2px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 1px solid transparent; text-align: left; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
   .task-item:hover { background: var(--accent-soft); }
   .task-item[aria-current="true"] { border-color: var(--accent); background: var(--accent-fill); }
@@ -204,10 +220,16 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   /* settings */
   .agent-card { display: grid; gap: var(--space-3); align-content: start; }
   .agent-card .between h2 { font-size: var(--text-title); }
+  /* wide enough that a choice like "As many as fit (default)" is not cut off */
+  .agent-card .form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); align-items: end; }
   .params { border-top: 1px solid var(--border); padding-top: var(--space-3); display: grid; gap: var(--space-3); }
   .switch-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: var(--target-min); }
   .tabpanel { display: none; } .tabpanel.on { display: grid; gap: var(--space-4); }
-  .savebar { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+  /* Settings: the tabs and, at the top right, Save and Discard. The row stays in view while the page scrolls. */
+  .settings-head { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; column-gap: var(--space-4); background: var(--bg); border-bottom: 1px solid var(--border); margin-top: calc(-1 * var(--space-4)); padding-top: var(--space-4); }
+  .settings-head .tabs { border-bottom: 0; flex: 1 1 auto; min-width: 0; }
+  .settings-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; padding: 4px 0; }
+  .settings-actions .btn { min-height: 36px; }
   .prompt-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: var(--space-4); align-items: start; }
   .prompt-layout textarea { min-height: 320px; padding: var(--space-3); line-height: 1.55; resize: vertical; font-family: var(--font-mono); font-size: var(--text-caption); }
   .theme-choice { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-lg); border: 1px solid var(--border-strong); cursor: pointer; background: transparent; color: var(--text); text-align: left; font: inherit; }
@@ -230,10 +252,9 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .chat .thread > .msg { justify-self: start; }
   .chat .thread > .msg.user { justify-self: end; }
   .msg .meta, .msg .btn { white-space: normal; }
-  .timeline li.tl-bad::before { border-color: var(--danger); }
+  .timeline li.tl-bad::before { border-color: var(--danger); background: var(--danger); }
   .label-like { font-size: var(--text-caption); font-weight: var(--weight-semibold); color: var(--text-muted); }
   .chat .thread .banner { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--warning) 12%, var(--bg)); }
-  .savebar { position: sticky; bottom: 0; z-index: 5; }
   .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; display: grid; gap: var(--space-2); width: min(420px, calc(100vw - 32px)); pointer-events: none; }
   .toasts .toast { pointer-events: auto; background: var(--bg); font-size: var(--text-caption); }
   .toast[data-tone="ok"] { border-color: var(--success); }
@@ -251,13 +272,38 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .group-head .count { font-weight: var(--weight-medium); }
   /* the particle field is a see-through layer filling the conversation area, behind the messages: a line along the
      bottom, and a face in the middle while the voice agent thinks or speaks */
-  /* room below the last message equal to the field's height, so it can always be scrolled clear of the particles */
+  /* the field covers the whole chat, down to the bottom of the message box, on two see-through canvases: the face
+     behind the messages, the particle line over them. The status line rests on the message box, and the field
+     lifts the particle line to run there (ChatView measures where, and tells the thread too). Nothing here has a
+     backing of its own but the messages: the thread reaches the bottom of the chat, and its messages scroll on
+     behind the particles, the status line and the message box. The message box is smoked glass, so what passes
+     behind it shows through, dimmed. The room below the last message lets it be scrolled clear of all three.
+     The rows are: room for the thread, the status line, a speech error if there is one, the message box */
   .chat { --field-h: clamp(64px, 44px + 3.2cqi, 104px); }
-  .chat .thread { grid-row: 1; grid-column: 1; position: relative; z-index: 1; padding-bottom: calc(var(--field-h) + var(--space-2)); }
+  .chat.on { position: relative; grid-template-rows: minmax(0, 1fr) auto auto auto; row-gap: 0; }
+  .chat .thread { grid-row: 1 / -1; grid-column: 1; position: relative; z-index: 1; padding-bottom: calc(var(--line-centre, 84px) + var(--field-h) / 2 + 6px); }
+  .chat .telemetry { grid-row: 2; grid-column: 1; margin-bottom: var(--space-2); }
+  .chat.on .voice-error { grid-row: 3; grid-column: 1; margin-bottom: var(--space-2); }
+  .chat .telemetry, .chat .voice-error { position: relative; z-index: 3; text-shadow: 0 0 2px var(--bg), 0 0 7px var(--bg); }
+  .chat .telemetry { pointer-events: none; }
+  .chat .composer { grid-row: 4; grid-column: 1; position: relative; z-index: 3; background: linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent), color-mix(in srgb, var(--accent) 8%, transparent)), color-mix(in srgb, var(--bg) 45%, transparent); }
+  .chat .voicefield.line { z-index: 2; }
   /* the message box grows to five lines, then scrolls without showing a scrollbar */
-  .composer textarea { scrollbar-width: none; -ms-overflow-style: none; overflow-y: auto; }
-  .composer textarea::-webkit-scrollbar { display: none; }
-  .chat .voicefield { grid-row: 1; grid-column: 1; align-self: stretch; height: 100%; min-height: 0; position: relative; z-index: 0; background: transparent; pointer-events: none; }
+  .composer textarea { overflow-y: auto; }
+  /* a canvas has a size of its own, so it is given one here: insets alone would not stretch it */
+  .chat .voicefield { position: absolute; top: 0; left: var(--space-5); width: calc(100% - 2 * var(--space-5)); height: calc(100% - var(--space-3)); z-index: 0; background: transparent; pointer-events: none; }
+  /* everything that lies over the field stands on a plate: its own fill on top of the page colour. The plate is
+     solid unless Settings, Appearance says how much of the face may show through (--msg-solid: 1 solid, 0 clear),
+     so the text stays readable over the face and over the dark backdrop the face gets on a light page */
+  .chat .thread :is(.msg, .task, .approval, .card, .empty) { position: relative; z-index: 0; background: none; }
+  .chat .thread :is(.msg, .task, .approval, .card, .empty)::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; background: var(--bg); opacity: var(--msg-solid, 1); }
+  .chat .thread :is(.msg, .card)::before { background: var(--panel-fill), var(--bg); }
+  .chat .thread .msg.user::before { background: linear-gradient(var(--accent-fill), var(--accent-fill)), var(--bg); }
+  .chat .thread .approval::before { background: radial-gradient(120% 100% at 50% 0%, color-mix(in srgb, var(--warning) 16%, transparent), transparent 70%), var(--panel-fill), var(--bg); }
+  .chat .thread .task { justify-self: start; min-width: min(460px, 100%); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2); }
+  .chat .thread .empty { border-radius: var(--radius-lg); }
+  .range-row { display: flex; align-items: center; gap: var(--space-3); flex: none; width: min(260px, 50%); }
+  .range-row b { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
   /* formatted agent text */
   .md { display: grid; gap: var(--space-2); white-space: normal; min-width: 0; }
   .md > * { margin: 0; min-width: 0; }
@@ -271,6 +317,16 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
   .md pre.code { margin: 0; }
   .md a { color: var(--accent-bright); }
   .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
+  /* a table keeps to the message's width; one that is wider scrolls sideways inside its own box */
+  .md .md-table { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+  .md table { border-collapse: collapse; min-width: 100%; font-size: .95em; }
+  .md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); min-width: 4em; max-width: 28em; overflow-wrap: break-word; }
+  .md th { font-weight: var(--weight-semibold); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .md th + th, .md td + td { border-left: 1px solid var(--border); }
+  .md tbody tr:last-child td { border-bottom: 0; }
+  .md thead:last-child th { border-bottom: 0; }
+  .md [data-align="center"] { text-align: center; }
+  .md [data-align="right"] { text-align: right; }
   .task-result .md { font-size: var(--text-caption); }
   .msg .caret:empty { display: inline; }
   /* trace list: long task titles wrap inside their column instead of spilling over the detail */
@@ -288,11 +344,12 @@ body { background: var(--bg); color: var(--text); font: var(--weight-body) var(-
     .prompt-layout { grid-template-columns: 1fr; }
   }
   @container app (max-width: 900px) {
-    .viewport, .chat .thread, .sidebar, .tabs, pre.code, .task-list { scrollbar-width: none; -ms-overflow-style: none; }
-    .viewport::-webkit-scrollbar, .chat .thread::-webkit-scrollbar, .sidebar::-webkit-scrollbar, .tabs::-webkit-scrollbar,
-    pre.code::-webkit-scrollbar, .task-list::-webkit-scrollbar { display: none; }
+    /* one column: the list and the trace take turns instead of the trace sitting below a long list */
     .trace-layout { grid-template-columns: 1fr; }
-    .task-list { position: static; }
+    .task-list { position: static; max-height: none; overflow: visible; }
+    .trace-layout.has-task > .task-list { display: none; }
+    .trace-layout:not(.has-task) > .trace-detail { display: none; }
+    .trace-back { display: inline-flex; }
     .story { grid-template-columns: 1fr; }
     .cols-2 { grid-template-columns: 1fr; }
   }

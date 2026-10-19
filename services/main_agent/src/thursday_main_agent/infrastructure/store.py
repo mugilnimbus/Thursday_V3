@@ -11,7 +11,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ from thursday_contracts.approvals import ApprovalDecision
 from thursday_contracts.task_control import PauseState
 
 from thursday_main_agent.domain.approvals import AllowRule, Approval, ApprovalStatus
-from thursday_main_agent.domain.tasks import TaskPhase, TaskRecord
+from thursday_main_agent.domain.tasks import DuplicateRequest, TaskPhase, TaskRecord
 from thursday_main_agent.domain.tool_calls import CallMark, MarkState
 
 MIGRATIONS: list[str] = [
@@ -53,7 +53,22 @@ MIGRATIONS: list[str] = [
     """
     create table settings (key text primary key, value text not null);
     """,
+    """
+    create table task_ends (task_id text primary key, ended_at text not null, cleared integer not null default 0);
+    create index task_ends_due on task_ends(cleared, ended_at);
+    insert into task_ends (task_id, ended_at)
+        select task_id, created_at from tasks where phase in ('completed', 'failed', 'canceled');
+    """,
+    """
+    create table accepted_requests (request text primary key, task_id text not null, chat_id text not null,
+                                    accepted_at text not null);
+    create index accepted_requests_chat on accepted_requests(chat_id);
+    create table deleted_chats (chat_id text primary key, deleted_at text not null);
+    """,
 ]
+DELETED_NOTE_DAYS = 7
+"""How long the note "this chat was deleted" is kept. Work that was under way when a chat was deleted ends within
+hours; after a week nothing can still arrive for it."""
 
 
 def _now() -> str:
@@ -103,13 +118,39 @@ class Store:
             self._db.close()
 
     # --- tasks -------------------------------------------------------------------------
-    def insert_task(self, task: TaskRecord) -> None:
+    def insert_task(self, task: TaskRecord, request: str | None = None) -> None:
+        """Record a new task, and with it the name of the request that started it, in one step. Raises
+        `DuplicateRequest` (and records nothing) when a task was already started under that name."""
         with self._tx() as db:
+            if request is not None:
+                known = db.execute("select task_id from accepted_requests where request = ?", (request,)).fetchone()
+                if known is not None:
+                    raise DuplicateRequest(known[0])
+                db.execute(
+                    "insert into accepted_requests values (?,?,?,?)", (request, task.task_id, task.chat_id, _now())
+                )
             db.execute("insert into tasks values (?,?,?,?,?,?,?,?,?,?,?)", self._task_row(task))
 
+    def task_for_request(self, request: str) -> str | None:
+        """The task that was started under this request name, if one was."""
+        with self._lock:
+            row = self._db.execute("select task_id from accepted_requests where request = ?", (request,)).fetchone()
+        return row[0] if row else None
+
     def save_task(self, task: TaskRecord) -> None:
+        """Save the task as it is now. A task of a chat that was deleted is not written back: it may still be
+        winding down when its chat goes."""
         with self._tx() as db:
-            db.execute("insert or replace into tasks values (?,?,?,?,?,?,?,?,?,?,?)", self._task_row(task))
+            if not self._gone(db, task.chat_id):
+                db.execute("insert or replace into tasks values (?,?,?,?,?,?,?,?,?,?,?)", self._task_row(task))
+
+    @staticmethod
+    def _gone(db: sqlite3.Connection, chat_id: str) -> bool:
+        return db.execute("select 1 from deleted_chats where chat_id = ?", (chat_id,)).fetchone() is not None
+
+    def chat_deleted(self, chat_id: str) -> bool:
+        with self._lock:
+            return self._gone(self._db, chat_id)
 
     @staticmethod
     def _task_row(t: TaskRecord) -> tuple[object, ...]:
@@ -289,20 +330,56 @@ class Store:
 
     def append_transcript(self, chat_id: str, task_id: str, messages: list[dict]) -> None:
         with self._tx() as db:
+            if self._gone(db, chat_id):
+                return
             db.executemany(
                 "insert into transcript (chat_id, task_id, message) values (?,?,?)",
                 [(chat_id, task_id, json.dumps(m, default=str)) for m in messages],
             )
             db.execute("update tasks set transcript_saved = 1 where task_id = ?", (task_id,))
 
+    def close_chat(self, chat_id: str) -> list[str]:
+        """Note that the chat was deleted, so nothing more starts or is written for it, and return its task ids.
+        The tasks themselves stay until `delete_chat`, so a clean-up that failed half-way can be run again."""
+        with self._tx() as db:
+            db.execute("insert or replace into deleted_chats values (?, ?)", (chat_id, _now()))
+            return [r[0] for r in db.execute("select task_id from tasks where chat_id = ?", (chat_id,))]
+
     def delete_chat(self, chat_id: str) -> list[str]:
-        """Remove everything this service holds for a chat. Idempotent. Returns the chat's task ids."""
+        """Remove everything this service holds for a chat, and note that it was deleted: from here on no task
+        starts in it and nothing is written for it again. Idempotent. Returns the chat's task ids."""
         with self._tx() as db:
             task_ids = [r[0] for r in db.execute("select task_id from tasks where chat_id = ?", (chat_id,))]
-            for table in ("transcript", "allow_rules", "approvals", "tasks", "chat_summaries"):
+            for table in ("transcript", "allow_rules", "approvals", "tasks", "chat_summaries", "accepted_requests"):
                 db.execute(f"delete from {table} where chat_id = ?", (chat_id,))  # noqa: S608 - fixed table names
+            db.execute("insert or replace into deleted_chats values (?, ?)", (chat_id, _now()))
+            old = (datetime.now(UTC) - timedelta(days=DELETED_NOTE_DAYS)).isoformat()
+            db.execute("delete from deleted_chats where deleted_at < ?", (old,))
             db.executemany("delete from call_marks where task_id = ?", [(t,) for t in task_ids])
+            db.executemany("delete from task_ends where task_id = ?", [(t,) for t in task_ids])
         return task_ids
+
+    # --- working data of finished tasks (retention) ---------------------------------------
+    def mark_ended(self, task_id: str, at: datetime) -> None:
+        """Note when a task ended; the retention period counts from here. The first note stays."""
+        with self._tx() as db:
+            db.execute("insert or ignore into task_ends (task_id, ended_at) values (?, ?)", (task_id, at.isoformat()))
+
+    def ended_uncleared(self, before: datetime) -> list[str]:
+        """Tasks that ended before the moment given and still have their working data."""
+        with self._lock:
+            rows = self._db.execute(
+                "select task_id from task_ends where cleared = 0 and ended_at < ? order by ended_at",
+                (before.isoformat(),),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def clear_working_data(self, task_id: str) -> None:
+        """Remove a finished task's run-once marks and answered approvals. The task itself stays."""
+        with self._tx() as db:
+            db.execute("delete from call_marks where task_id = ?", (task_id,))
+            db.execute("delete from approvals where task_id = ? and status != 'pending'", (task_id,))
+            db.execute("update task_ends set cleared = 1 where task_id = ?", (task_id,))
 
     # --- chat summaries (compaction) -----------------------------------------------------
     def chat_summary(self, chat_id: str) -> tuple[int, str] | None:

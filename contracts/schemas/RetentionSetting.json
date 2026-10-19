@@ -1,0 +1,17 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "days": {
+      "description": "0 keeps working data until it is deleted by hand.",
+      "maximum": 3650,
+      "minimum": 0,
+      "title": "Days",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "days"
+  ],
+  "title": "RetentionSetting",
+  "type": "object"
+}

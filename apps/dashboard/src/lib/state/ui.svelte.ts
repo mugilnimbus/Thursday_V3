@@ -9,13 +9,18 @@ export type DialogState =
   | { kind: 'delete-chat'; chatId: string }
   | { kind: 'delete-project'; projectId: string };
 
-/** A yes/no question shown in the app's own dialog (browser popups are blocked in embedded panes). */
+export type Answer = 'yes' | 'no' | 'save';
+
+/** A question shown in the app's own dialog (browser popups are blocked in embedded panes). Usually yes or no;
+    with `save`, a third button that keeps the work instead of dropping it. */
 export interface Question {
   title: string;
   body: string;
   action: string;
   danger?: boolean;
-  resolve: (yes: boolean) => void;
+  /** Label of the save button; the dialog then offers Cancel, the action, and this. */
+  save?: string;
+  resolve: (answer: Answer) => void;
 }
 
 export const NARROW_PX = 760;
@@ -32,13 +37,28 @@ class Ui {
   }
 
   /** Ask before a destructive or discarding action. Resolves true only when the user confirms. */
-  ask(question: Omit<Question, 'resolve'>): Promise<boolean> {
-    this.question?.resolve(false);
-    return new Promise((resolve) => (this.question = { ...question, resolve }));
+  ask(question: Omit<Question, 'resolve' | 'save'>): Promise<boolean> {
+    this.question?.resolve('no');
+    return new Promise((resolve) => (this.question = { ...question, resolve: (answer) => resolve(answer === 'yes') }));
   }
 
-  answer(yes: boolean): void {
-    this.question?.resolve(yes);
+  /** Before leaving unsaved edits: save them, discard them, or stay where you are. */
+  askUnsaved(body: string, save = 'Save changes'): Promise<'save' | 'discard' | 'cancel'> {
+    this.question?.resolve('no');
+    return new Promise((resolve) => {
+      this.question = {
+        title: 'Unsaved changes',
+        body,
+        action: 'Discard',
+        danger: true,
+        save,
+        resolve: (answer) => resolve(answer === 'save' ? 'save' : answer === 'yes' ? 'discard' : 'cancel'),
+      };
+    });
+  }
+
+  answer(answer: boolean | 'save'): void {
+    this.question?.resolve(answer === 'save' ? 'save' : answer ? 'yes' : 'no');
     this.question = null;
   }
 

@@ -53,3 +53,30 @@ async def test_a_supervisor_that_does_not_react_is_stopped_before_its_services(t
     outcome = await shut_down(SPECS, tmp_path, fleet, fleet, wait_seconds=0.05, interval=0.01)
     assert fleet.killed == [-4242, 1, 2], "supervisor first, so it cannot restart them"
     assert set(outcome.values()) == {"force stopped"} and not (tmp_path / "launcher.pid").exists()
+
+
+class Starting(Fleet):
+    """A supervisor whose services do not answer yet. It ends, removing its record, when it is asked to."""
+
+    def __init__(self, root: Path, reacts: bool) -> None:
+        super().__init__(root, set())
+        self.reacts = reacts
+        (root / "launcher.pid").write_text("4242", encoding="utf-8")
+
+    async def is_healthy(self, spec: ServiceSpec) -> bool:
+        if self.reacts and (self.root / STOP_FILE).exists():
+            (self.root / "launcher.pid").unlink(missing_ok=True)
+        return False
+
+
+async def test_a_supervisor_whose_services_do_not_answer_is_still_asked_to_stop(tmp_path: Path) -> None:
+    fleet = Starting(tmp_path, reacts=True)
+    outcome = await shut_down(SPECS, tmp_path, fleet, fleet, interval=0.01)
+    assert set(outcome.values()) == {"was not running"} and fleet.killed == []
+    assert not (tmp_path / "launcher.pid").exists() and not (tmp_path / STOP_FILE).exists()
+
+
+async def test_a_supervisor_that_ignores_the_request_is_stopped_even_with_no_service_up(tmp_path: Path) -> None:
+    fleet = Starting(tmp_path, reacts=False)
+    await shut_down(SPECS, tmp_path, fleet, fleet, wait_seconds=0.05, interval=0.01)
+    assert fleet.killed == [-4242] and not (tmp_path / "launcher.pid").exists()

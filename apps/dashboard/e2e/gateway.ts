@@ -32,9 +32,11 @@ const approval = {
 };
 
 const llm = (model: string) => ({
-  provider: 'lmstudio', base_url: 'http://127.0.0.1:1234', model, api_key_set: true, api_key_source: 'LMSTUDIO_API_TOKEN',
+  provider: 'lmstudio', base_url: 'http://127.0.0.1:1234', model, api_key_set: false, compact_at_tokens: null, idle_unload_minutes: 5, idle_seconds: 12,
   sends_data_off_pc: false, supports_lifecycle: true, reachable: true, loaded: { context_length: 32000, adopted: true, load_seconds: null },
-  load: { context_length: 32000, flash_attention: true, offload_kv_cache_to_gpu: null, eval_batch_size: null, num_experts: null },
+  load: { context_length: 32000, flash_attention: true, offload_kv_cache_to_gpu: null, eval_batch_size: null, num_experts: null, moe_cpu_layers: null, gpu_layers: null, gpu_split: null, gpu_priority: null },
+  inference: { temperature: null, top_p: null, max_output_tokens: null, reasoning: 'default' },
+  llamacpp: { installed: true, models_dir: '', gpu: null }, hears_audio: false,
 });
 
 const sample = {
@@ -45,6 +47,7 @@ const sample = {
     { name: 'voice_agent', up: true, latency_ms: 2.5, metrics: { llm_tokens_per_second: 70, context_length: 64000, llm_input_tokens: 500 } },
     { name: 'main_agent', up: true, latency_ms: 3.1, metrics: { llm_tokens_per_second: 80, keeping_awake: true, outbox_backlog: 0 } },
   ],
+  storage: [{ name: 'main_agent', bytes: 154_000_000 }, { name: 'gateway', bytes: 21_000_000 }, { name: 'logs', bytes: 5_000_000 }],
 };
 
 /** One second of a 440 Hz tone as 16-bit mono WAV, standing in for a spoken reply. */
@@ -82,17 +85,21 @@ export interface Fake {
   resolved: boolean;
   /** Chats deleted during the test: the gateway stops listing them. */
   deleted: string[];
+  /** Whether chat c1 sends straight to the main agent (the gateway keeps this, so every device agrees). */
+  direct: boolean;
+  /** Per-test task trace, kept separate so one scenario can model a complete multi-step run. */
+  trace: ReturnType<typeof event>[];
 }
 
 export async function fakeGateway(page: Page): Promise<Fake> {
-  const fake: Fake = { recordings: [], spoken: [], writes: [], stream: () => socket, resolved: false, deleted: [] };
+  const fake: Fake = { recordings: [], spoken: [], writes: [], stream: () => socket, resolved: false, deleted: [], direct: false, trace: [...timeline] };
   let socket: WebSocketRoute | null = null;
 
   const routes: Record<string, () => unknown> = {
     'GET /v1/status': () => ({ main_agent: true, voice_agent: true, llm_endpoint: true, queued_messages: 0, banners: [], stream_pos: pos }),
     'GET /v1/projects': () => ({ projects: [{ project_id: 'p1', name: 'Demo', folder: 'C:\\Demo', created_at: iso(86_400) }] }),
     'GET /v1/projects/p1/chats': () => ({
-      chats: [{ chat_id: 'c1', title: 'Clean up logs', created_at: iso(3600), last_activity: iso(30) }].filter((chat) => !fake.deleted.includes(chat.chat_id)),
+      chats: [{ chat_id: 'c1', title: 'Clean up logs', created_at: iso(3600), last_activity: iso(30), direct: fake.direct }].filter((chat) => !fake.deleted.includes(chat.chat_id)),
     }),
     'GET /v1/chats/c1/messages': () => ({
       messages: [
@@ -101,19 +108,21 @@ export async function fakeGateway(page: Page): Promise<Fake> {
       ],
       pending: [],
     }),
-    'GET /v1/chats/c1/timeline': () => ({ events: timeline }),
+    'GET /v1/chats/c1/timeline': () => ({ events: fake.trace }),
     'GET /v1/chats/c1/tasks': () => ({ tasks: [task()] }),
     'GET /v1/tasks': () => ({ tasks: [{ ...task(), chat_title: 'Clean up logs', project_name: 'Demo' }] }),
-    'GET /v1/tasks/t1': () => ({ task: task(), trace: timeline }),
+    'GET /v1/tasks/t1': () => ({ task: task(), trace: fake.trace }),
     'GET /v1/approvals': () => ({ approvals: fake.resolved ? [] : [approval] }),
     'GET /v1/notifications': () => ({ notifications: [] }),
     'GET /v1/agents/main/llm': () => llm('google/gemma-4-26b'),
     'GET /v1/agents/voice/llm': () => llm('google/gemma-4-e2b'),
+    'GET /v1/agents/main/models': () => ({ models: [{ key: 'google/gemma-4-26b', loaded: true, max_context_length: 262144, trained_for_tool_use: true, size_bytes: null, projector: null }], error: null }),
+    'GET /v1/agents/voice/models': () => ({ models: ['google/gemma-4-e2b', 'google/gemma-4-e4b', 'google/gemma-4-e4b'].map((key) => ({ key, loaded: false, max_context_length: 131072, trained_for_tool_use: true, size_bytes: null, projector: null })), error: null }),
     'GET /v1/agents/main/prompt': () => ({ version: 2, text: 'You are Thursday.' }),
     'GET /v1/agents/voice/prompt': () => ({ version: 0, text: 'Default voice prompt.' }),
     'GET /v1/agents/main/prompt/versions': () => ({ versions: [{ version: 2, created_at: iso(600), text: 'You are Thursday.' }, { version: 1, created_at: iso(86_400), text: 'Old.' }], default: 'Default.' }),
     'GET /v1/agents/voice/prompt/versions': () => ({ versions: [], default: 'Default voice prompt.' }),
-    'GET /v1/settings/general': () => ({ compaction_threshold_percent: 90, keep_awake_paused_minutes: 30, trace_retention_days: 30, metrics_retention_days: 7, main_agent_reachable: true }),
+    'GET /v1/settings/general': () => ({ compaction_threshold_percent: 90, keep_awake_paused_minutes: 30, data_retention_days: 30, metrics_retention_days: 7, main_agent_reachable: true }),
     'GET /v1/settings/backup': () => ({ folder: 'C:\\Backup', daily: true, keep_copies: 7, last_run: { folder: 'C:\\Backup\\thursday-backup-1', complete: true, created_at: iso(3600), services: { gateway: true, main_agent: true, voice_agent: true } } }),
     'GET /v1/devices': () => ({ devices: [{ device_id: 'dev-1', name: 'Pixel 9', created_at: iso(86_400), last_seen: iso(60) }] }),
     'GET /v1/tools': () => ({
@@ -122,8 +131,15 @@ export async function fakeGateway(page: Page): Promise<Fake> {
       servers: [{ project_id: 'p1', project_name: 'Demo', alive: true, open_sessions: 1, idle_seconds: 120 }],
       catalog: [{ name: 'fs.delete', description: 'Delete', asks_first: true }, { name: 'fs.read', description: 'Read', asks_first: false }],
     }),
+    'GET /v1/fs/folders': () => ({
+      path: 'C:\\', parent: null, folders: [{ name: 'Models', path: 'C:\\Models' }, { name: '.lmstudio', path: 'C:\\.lmstudio' }], home: 'C:\\Users\\me',
+      model_folders: [{ name: "LM Studio's models", path: 'C:\\Users\\me\\.lmstudio\\models' }],
+    }),
     'GET /v1/speech': () => ({ available: true, voices: ['af_heart'] }),
-    'GET /v1/monitor': () => ({ latest: sample, history: [sample, sample], llm_calls: [{ ts: sample.ts, agent: 'main', tokens_per_second: 80, ttft_seconds: 0.4, input_tokens: 900, output_tokens: 30, context_length: 32000 }] }),
+    'GET /v1/monitor': () => ({ latest: sample, history: [sample, sample], llm_calls: [
+      { ts: sample.ts, agent: 'main', tokens_per_second: 80, ttft_seconds: 0.4, input_tokens: 900, output_tokens: 30, context_length: 32000 },
+      { ts: sample.ts, agent: 'voice', tokens_per_second: 70, ttft_seconds: 0.081, input_tokens: 500, output_tokens: 20, context_length: 8192 },
+    ] }),
   };
 
   function task() {
@@ -149,6 +165,19 @@ export async function fakeGateway(page: Page): Promise<Fake> {
       fake.writes.push({ method: request.method(), path: url.pathname, body: request.postDataJSON?.() ?? null });
       if (request.headers()['x-thursday-client'] !== 'dashboard') return route.fulfill({ status: 403 });
       if (key === 'POST /v1/approvals/ap1') fake.resolved = true;
+      if (key === 'PUT /v1/agents/voice/llm') {
+        const body = request.postDataJSON() as { provider?: string; models_dir?: string | null };
+        return route.fulfill({ json: { ...llm('google/gemma-4-e2b'), provider: body.provider ?? 'lmstudio', llamacpp: { installed: true, models_dir: body.models_dir ?? '', gpu: null, devices: [{ index: 0, name: 'NVIDIA GeForce RTX 3080 Ti', total_mb: 12287 }, { index: 1, name: 'NVIDIA GeForce RTX 3080 Ti', total_mb: 12287 }] } } });
+      }
+      if (key === 'PUT /v1/agents/main/llm/key') {
+        const stored = !!(request.postDataJSON() as { key: string }).key;
+        return route.fulfill({ json: { ...llm('google/gemma-4-26b'), api_key_set: stored } });
+      }
+      if (key === 'PATCH /v1/chats/c1') {
+        fake.direct = (request.postDataJSON() as { direct?: boolean }).direct ?? fake.direct;
+        return route.fulfill({ json: { chat_id: 'c1', title: 'Clean up logs', direct: fake.direct } });
+      }
+      if (key === 'POST /v1/chats/c1/messages') return route.fulfill({ status: 202, json: { status: 'queued', new: true, direct: fake.direct } });
       if (request.method() === 'DELETE' && url.pathname.startsWith('/v1/chats/')) fake.deleted.push(url.pathname.split('/').pop()!);
       return route.fulfill({ status: request.method() === 'DELETE' ? 202 : 200, json: { status: 'ok' } });
     }

@@ -24,6 +24,10 @@ class OutgoingStatus(StrEnum):
     FAILED = "failed"
 
 
+CHAT_DELETED = "The chat was deleted."
+"""Why a message that was still waiting failed when its chat was deleted."""
+
+
 def clean_name(value: str, what: str) -> str:
     name = " ".join(value.split())
     if not name or len(name) > MAX_NAME:
@@ -51,6 +55,7 @@ class Chat:
     title: str
     created_at: datetime
     state: RecordState = RecordState.ACTIVE
+    direct: bool = False  # every message in this chat goes straight to the main agent
 
 
 @dataclass(slots=True)
@@ -65,3 +70,4 @@ class Outgoing:
     created_at: datetime
     attempts: int = 0
     error: str = ""
+    direct: bool = False  # decided when the message was accepted, from the chat's switch

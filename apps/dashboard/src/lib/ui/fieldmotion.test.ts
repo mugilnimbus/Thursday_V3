@@ -96,4 +96,14 @@ describe('voice field motion', () => {
     }
     expect(fieldLayout(1600, 1300).scale).toBe(280); // capped on large screens
   });
+
+  it('rests the line on the bottom, or lifts it to where it is asked to run', () => {
+    const resting = fieldLayout(820, 700);
+    expect(resting.lineMid).toBe(700 - resting.lineHeight / 2);
+    const lifted = fieldLayout(820, 700, 120); // the middle of the line 120 px above the bottom
+    expect(lifted.lineMid).toBe(580);
+    expect(lifted.cy, 'the face moves up with it, clear of the band').toBeLessThan(resting.cy);
+    expect(fieldLayout(820, 700, 10).lineMid, 'never lower than resting on the bottom').toBe(resting.lineMid);
+    expect(fieldLayout(820, 700, 5000).lineMid, 'never above the field').toBe(resting.lineHeight / 2);
+  });
 });

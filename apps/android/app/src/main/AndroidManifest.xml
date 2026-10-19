@@ -22,9 +22,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Thursday">
 
+        <!-- Turning the device, resizing the window or folding it redraws the screens; the app is not started again,
+             so the open chat, a half-filled form and a recording stay as they are. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

@@ -4,26 +4,27 @@ Replay, allow-always rules, chat deletion, prompts, LLM settings and model lifec
 settings, tool servers and the tool catalog.
 """
 
-from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from thursday_contracts.retention import RETENTION_PATH, RetentionSetting
+from thursday_llm import management
+from thursday_llm.overrides import KeyChange, LlmOverrides, LoadOverrides
 from thursday_llm.providers import ProviderError
-from thursday_llm.runtime import LlmOverrides, LlmRuntime, LoadOverrides
+from thursday_llm.runtime import LlmRuntime, ModelBusy
 from thursday_runtime.auth import ServiceTokenAuth
-from thursday_runtime.outbox import OutboxStore
+from thursday_runtime.secret_store import SecretStoreError
 
-from thursday_main_agent.infrastructure.store import Store
+from thursday_main_agent.application.behavior import Behavior, BehaviorSettings
+from thursday_main_agent.application.deletion import Deletion
+from thursday_main_agent.application.ports import ManagementRecords, Outbox
+from thursday_main_agent.application.retention import WorkingData
+from thursday_main_agent.application.status import ServiceStatus
 
 
 class PromptBody(BaseModel):
     text: str = Field(min_length=1, max_length=50_000)
-
-
-class Behavior(BaseModel):
-    compaction_threshold_percent: float = Field(ge=10, le=99)
-    keep_awake_paused_minutes: float = Field(ge=0, le=24 * 60)
 
 
 class BehaviorPatch(BaseModel):
@@ -40,16 +41,15 @@ class Tools(Protocol):
 
 
 def build_management_router(
-    store: Store,
-    outbox: OutboxStore,
+    store: ManagementRecords,
+    outbox: Outbox,
     llm: LlmRuntime,
     auth: ServiceTokenAuth,
-    delete_chat: Callable[[str], Awaitable[int]],
-    delete_project: Callable[[str], Awaitable[dict[str, Any]]],
-    status: Callable[[], dict[str, Any]],
+    deletion: Deletion,
+    status: ServiceStatus,
+    behavior: BehaviorSettings,
+    retention: WorkingData,
     default_prompt: str,
-    behavior: Callable[[], Behavior],
-    apply_behavior: Callable[[Behavior], None],
     tools: Tools,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1", dependencies=[Depends(auth)])
@@ -80,12 +80,12 @@ def build_management_router(
     @router.delete("/chats/{chat_id}")
     async def remove_chat(chat_id: str) -> dict[str, Any]:
         """Delete saga participant: idempotent, safe to repeat."""
-        return {"chat_id": chat_id, "deleted_tasks": await delete_chat(chat_id)}
+        return {"chat_id": chat_id, "deleted_tasks": await deletion.chat(chat_id)}
 
     @router.delete("/projects/{project_id}")
     async def remove_project(project_id: str) -> dict[str, Any]:
         """Delete saga participant: idempotent, safe to repeat. The project folder itself is never touched."""
-        return {"project_id": project_id, **(await delete_project(project_id))}
+        return {"project_id": project_id, **(await deletion.project(project_id))}
 
     @router.get("/prompt")
     async def prompt() -> dict[str, Any]:
@@ -103,46 +103,63 @@ def build_management_router(
 
     @router.get("/llm")
     async def llm_settings() -> dict[str, Any]:
-        return {**llm.describe(), "reachable": await llm.provider.reachable()}
+        return await management.settings(llm)
 
     @router.put("/llm")
     async def update_llm(body: LlmOverrides) -> dict[str, Any]:
-        await llm.update(body)
+        try:
+            await llm.update(body)
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
         return llm.describe()
 
-    @router.post("/llm/reload-keys")
-    async def reload_keys() -> dict[str, Any]:
-        await llm.reload_keys()
+    @router.put("/llm/key")
+    async def set_key(body: KeyChange) -> dict[str, Any]:
+        try:
+            await llm.set_key(body.key.get_secret_value().strip())
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except SecretStoreError as exc:
+            raise HTTPException(503, str(exc)) from exc
         return llm.describe()
 
     @router.get("/model")
     async def model() -> dict[str, Any]:
         return llm.describe()
 
+    @router.get("/models")
+    async def available_models() -> dict[str, Any]:
+        return await management.available_models(llm)
+
     @router.post("/model/{action}")
     async def model_action(action: str, body: LoadOverrides | None = None) -> dict[str, Any]:
         try:
-            if action == "load":
-                await llm.provider.ensure_loaded()
-            elif action == "reload":
-                await llm.reload_model(body)
-            elif action == "unload":
-                await llm.provider.unload()
-            else:
-                raise HTTPException(404, "unknown action")
+            return await management.model_action(llm, action, body)
+        except management.UnknownAction as exc:
+            raise HTTPException(404, "unknown action") from exc
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
         except ProviderError as exc:
             raise HTTPException(503, str(exc)) from exc
-        return llm.describe()
 
     @router.get("/behavior")
     async def get_behavior() -> Behavior:
-        return behavior()
+        return behavior.current()
 
     @router.put("/behavior")
     async def put_behavior(body: BehaviorPatch) -> Behavior:
-        merged = Behavior.model_validate({**behavior().model_dump(), **body.model_dump(exclude_none=True)})
-        apply_behavior(merged)
+        merged = Behavior.model_validate({**behavior.current().model_dump(), **body.model_dump(exclude_none=True)})
+        behavior.apply(merged)
         return merged
+
+    @router.get(RETENTION_PATH)
+    async def get_retention() -> RetentionSetting:
+        return RetentionSetting(days=retention.days)
+
+    @router.put(RETENTION_PATH)
+    async def put_retention(body: RetentionSetting) -> RetentionSetting:
+        """The gateway sends the period chosen in Settings. Repeating it changes nothing."""
+        return RetentionSetting(days=retention.apply(body.days))
 
     @router.get("/tools/catalog")
     async def catalog(project_id: str, folder: str) -> dict[str, Any]:
@@ -164,6 +181,6 @@ def build_management_router(
 
     @router.get("/status")
     async def service_status() -> dict[str, Any]:
-        return status()
+        return status.status()
 
     return router

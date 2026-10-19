@@ -46,3 +46,18 @@ async def test_session_timeout_closes_the_session(tmp_path) -> None:
     shell = await PersistentShell.start(tmp_path)
     result = await shell.run("Start-Sleep -Seconds 30", timeout=2, output_limit=1000)
     assert result.timed_out and not shell.alive
+
+
+async def test_a_powershell_error_in_a_session_is_not_reported_as_success(tmp_path) -> None:
+    shell = await PersistentShell.start(tmp_path)
+    try:
+        failed = await shell.run("throw 'it broke'", timeout=20, output_limit=2000)
+        assert failed.exit_code == 1 and "it broke" in failed.output
+        missing = await shell.run("no-such-command-here", timeout=20, output_limit=2000)
+        assert missing.exit_code == 1
+        native = await shell.run("cmd /c exit 7", timeout=20, output_limit=2000)
+        assert native.exit_code == 7, "a program's own exit code is kept"
+        fine = await shell.run("Write-Output 'ok'", timeout=20, output_limit=2000)
+        assert fine.exit_code == 0 and "ok" in fine.output, "and one failure does not stick to the next command"
+    finally:
+        await shell.close()

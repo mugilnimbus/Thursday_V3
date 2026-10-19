@@ -12,13 +12,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 from thursday_runtime.backup import backup_sqlite
 
+from thursday_gateway.application.ports import BackupParticipants, SettingsRecords
 from thursday_gateway.application.waiting import wait_any
 from thursday_gateway.domain.model import InvalidInput
-from thursday_gateway.infrastructure.store import Store
 
 log = logging.getLogger(__name__)
 PREFIX = "thursday-backup-"
@@ -33,37 +32,29 @@ class BackupSettings(BaseModel):
 class BackupService:
     def __init__(
         self,
-        store: Store,
+        store: SettingsRecords,
         own_files: list[Path],
-        agents: dict[str, str],
-        token: SecretStr,
+        participants: BackupParticipants,
         defaults: BackupSettings,
-        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._store = store
         self._own_files = own_files
-        self._agents = agents
-        self._headers = {"Authorization": f"Bearer {token.get_secret_value()}"}
-        self._client = client or httpx.AsyncClient(timeout=120)
+        self._participants = participants
         self._defaults = defaults
         self._lock = asyncio.Lock()
-        with store.tx() as db:
-            db.execute("create table if not exists settings (key text primary key, value text not null)")
 
     def settings(self) -> BackupSettings:
-        rows = self._store.query("select value from settings where key = 'backup'")
-        return BackupSettings.model_validate_json(rows[0]["value"]) if rows else self._defaults
+        saved = self._store.get_setting("backup")
+        return BackupSettings.model_validate(saved) if saved is not None else self._defaults
 
     def save_settings(self, new: BackupSettings) -> BackupSettings:
         if new.folder and not Path(new.folder).is_absolute():
             raise InvalidInput("backup folder must be an absolute path")
-        with self._store.tx() as db:
-            db.execute("insert or replace into settings values ('backup', ?)", (new.model_dump_json(),))
+        self._store.set_setting("backup", new.model_dump())
         return new
 
     def last_run(self) -> dict[str, Any] | None:
-        rows = self._store.query("select value from settings where key = 'backup_last'")
-        return json.loads(rows[0]["value"]) if rows else None
+        return self._store.get_setting("backup_last")
 
     async def run(self) -> dict[str, Any]:
         settings = self.settings()
@@ -71,8 +62,7 @@ class BackupService:
             raise InvalidInput("choose a backup folder first")
         async with self._lock:
             started = datetime.now(UTC)
-            target = Path(settings.folder) / f"{PREFIX}{started.strftime('%Y%m%d-%H%M%S')}"
-            target.mkdir(parents=True, exist_ok=False)
+            target = self._new_folder(Path(settings.folder), started)
             manifest: dict[str, Any] = {"created_at": started.isoformat(), "services": {}}
             gateway_dir = target / "gateway"
             manifest["services"]["gateway"] = {
@@ -83,15 +73,8 @@ class BackupService:
                     if f.exists()
                 },
             }
-            for name, base_url in self._agents.items():
-                try:
-                    response = await self._client.post(
-                        f"{base_url}/v1/backup", json={"target_dir": str(target)}, headers=self._headers
-                    )
-                    response.raise_for_status()
-                    manifest["services"][name] = {"ok": True, "files": response.json().get("files", {})}
-                except httpx.HTTPError as exc:
-                    manifest["services"][name] = {"ok": False, "error": type(exc).__name__}
+            for name in self._participants.names():
+                manifest["services"][name] = await self._participants.copy(name, str(target))
             manifest["complete"] = all(s["ok"] for s in manifest["services"].values())
             (target / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             self._prune(Path(settings.folder), settings.keep_copies)
@@ -101,15 +84,40 @@ class BackupService:
                 "created_at": started.isoformat(),
                 "services": {k: v["ok"] for k, v in manifest["services"].items()},
             }
-            with self._store.tx() as db:
-                db.execute("insert or replace into settings values ('backup_last', ?)", (json.dumps(summary),))
+            self._store.set_setting("backup_last", summary)
             return summary
 
     @staticmethod
-    def _prune(folder: Path, keep: int) -> None:
+    def _new_folder(folder: Path, started: datetime) -> Path:
+        """A folder of its own for this run: two runs in the same second get different names, in order."""
+        name = f"{PREFIX}{started.strftime('%Y%m%d-%H%M%S')}"
+        folder.mkdir(parents=True, exist_ok=True)
+        taken = sorted(p.name for p in folder.iterdir() if p.name.startswith(name))
+        if not taken:
+            target = folder / name
+        else:  # after the newest of this second, also when earlier ones were removed since
+            last = taken[-1].removeprefix(name).lstrip("-")
+            target = folder / f"{name}-{(int(last) if last.isdigit() else 1) + 1:02d}"
+        target.mkdir(exist_ok=False)
+        return target
+
+    @staticmethod
+    def _complete(copy: Path) -> bool:
+        try:
+            return json.loads((copy / "manifest.json").read_text(encoding="utf-8")).get("complete") is True
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    @classmethod
+    def _prune(cls, folder: Path, keep: int) -> None:
+        """Keep the newest copies. The newest complete one is never removed, however many partial runs follow."""
         copies = sorted(p for p in folder.iterdir() if p.is_dir() and p.name.startswith(PREFIX))
-        for old in copies[:-keep]:
-            shutil.rmtree(old, ignore_errors=True)
+        kept, old = copies[-keep:], copies[:-keep]
+        if not any(cls._complete(c) for c in kept):
+            last_complete = next((c for c in reversed(old) if cls._complete(c)), None)
+            old = [c for c in old if c != last_complete]
+        for copy in old:
+            shutil.rmtree(copy, ignore_errors=True)
 
     async def run_daily(self, stop: asyncio.Event) -> None:
         while not stop.is_set():

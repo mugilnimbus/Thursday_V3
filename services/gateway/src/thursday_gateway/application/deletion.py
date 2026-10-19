@@ -7,10 +7,10 @@ import asyncio
 import contextlib
 import logging
 
+from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
+from thursday_gateway.application.ports import DeletionRecords, MainAgent, VoiceAgent
 from thursday_gateway.application.waiting import wait_any
 from thursday_gateway.domain.model import RecordState
-from thursday_gateway.infrastructure.agents import AgentRefused, AgentUnavailable, MainAgentClient, VoiceAgentClient
-from thursday_gateway.infrastructure.store import Store
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class DeletionSaga:
     The folder on disk is never touched.
     """
 
-    def __init__(self, store: Store, main: MainAgentClient, voice: VoiceAgentClient) -> None:
+    def __init__(self, store: DeletionRecords, main: MainAgent, voice: VoiceAgent) -> None:
         self._store = store
         self._main = main
         self._voice = voice
@@ -45,7 +45,7 @@ class DeletionSaga:
                 continue
             self._store.purge_chat(chat.chat_id)
         for project in self._store.projects_in_state(RecordState.DELETING):
-            if self._store.query("select 1 from chats where project_id = ?", (project.project_id,)):
+            if self._store.project_has_chats(project.project_id):
                 pending += 1
                 continue
             try:

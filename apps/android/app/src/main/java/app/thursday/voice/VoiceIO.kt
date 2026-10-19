@@ -11,16 +11,21 @@ import androidx.compose.runtime.setValue
 import app.thursday.Prefs
 import app.thursday.data.ApiException
 import app.thursday.data.GatewayApi
+import app.thursday.domain.SentenceFeed
+import app.thursday.domain.sentences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 enum class VoiceMode { IDLE, RECORDING, TRANSCRIBING, PLAYING }
 
@@ -29,7 +34,9 @@ enum class VoiceMode { IDLE, RECORDING, TRANSCRIBING, PLAYING }
  *
  * In: push to talk. The clip is recorded to a temporary file, sent to the PC's speech service through the
  * gateway, deleted, and the text that comes back is sent as a normal message.
- * Out: replies are fetched as audio and played when "read replies aloud" is on.
+ * Out: replies are read aloud when "read replies aloud" is on, one sentence at a time: the first sentence plays
+ * while the next is being made, and a reply that is still being written is read as it arrives. A piece that cannot
+ * be played says why in the message bar; stopping one that is playing never blocks the ones after it.
  * No audio is kept on the phone or the PC.
  */
 class VoiceIO(private val context: Context, private val api: GatewayApi, private val prefs: Prefs, private val scope: CoroutineScope) {
@@ -48,8 +55,15 @@ class VoiceIO(private val context: Context, private val api: GatewayApi, private
     private var clip: File? = null
     private var meter: Job? = null
     private var player: MediaPlayer? = null
-    private val queue = ArrayDeque<String>()
-    private var speaking = false
+    private val replies = SpeechQueue(
+        scope,
+        fetch = ::fetchClip,
+        play = { if (it.isNotEmpty()) playClip(it) },
+        onError = { error = it },
+        allowed = { mode != VoiceMode.RECORDING && mode != VoiceMode.TRANSCRIBING && speakReplies }, // not once the user starts talking
+        onIdle = { if (mode == VoiceMode.PLAYING) mode = VoiceMode.IDLE },
+    )
+    private val feeds = HashMap<String, SentenceFeed>() // replies being read while they are still written
 
     suspend fun refresh() {
         available = runCatching { api.speechAvailable() }.getOrDefault(false)
@@ -67,6 +81,7 @@ class VoiceIO(private val context: Context, private val api: GatewayApi, private
         if (mode == VoiceMode.RECORDING || mode == VoiceMode.TRANSCRIBING) return
         stopSpeaking()
         error = null
+        warm()
         val file = File(context.cacheDir, "clip.m4a")
         try {
             @Suppress("DEPRECATION")
@@ -94,6 +109,19 @@ class VoiceIO(private val context: Context, private val api: GatewayApi, private
             release()
             error = "Could not start the microphone."
         }
+    }
+
+    /**
+     * The microphone was pressed: the PC starts loading what the turn needs while you are still talking.
+     * Models that were unloaded after a break would otherwise make the first turn wait.
+     */
+    private fun warm() {
+        scope.launch { runCatching { api.warmSpeech(speakReplies) } }
+    }
+
+    /** A message was sent and its reply will be read aloud: the PC loads the voice while the reply is written. */
+    fun warmVoice() {
+        if (speakReplies && available) scope.launch { runCatching { api.warmSpeech(speak = true, listen = false) } }
     }
 
     /** Stop recording and return what was said ("" when nothing was heard). */
@@ -138,58 +166,82 @@ class VoiceIO(private val context: Context, private val api: GatewayApi, private
 
     /* ---------- text to speech ---------- */
 
-    /** Read a reply aloud, queued behind any reply still playing. Does nothing unless the setting is on. */
+    /** Read a whole reply aloud, sentence by sentence, behind anything still playing. Nothing unless the setting is on. */
     fun say(text: String) {
-        if (!speakReplies || !available || text.isBlank()) return
-        queue.addLast(text)
-        if (!speaking) scope.launch { drain() }
+        if (!speakReplies || text.isBlank()) return
+        if (!available) {
+            // The speech service may have started after this screen did: look again once before giving up.
+            scope.launch {
+                refresh()
+                if (available) sentences(text).forEach(replies::add)
+            }
+            return
+        }
+        sentences(text).forEach(replies::add)
     }
 
+    /** Read a reply aloud while it is still being written: call with each new part of its text. */
+    fun sayPart(replyId: String, part: String) {
+        if (!speakReplies || !available) return
+        feeds.getOrPut(replyId) { SentenceFeed() }.push(part).forEach(replies::add)
+    }
+
+    /** The reply is complete: read what is left of it. False when none of it came through [sayPart]. */
+    fun sayEnd(replyId: String): Boolean {
+        val feed = feeds.remove(replyId) ?: return false
+        feed.flush().forEach(replies::add)
+        return true
+    }
+
+    /** Stop the reply that is playing and drop the ones waiting. Cancelling the reader is what releases the player. */
     fun stopSpeaking() {
-        queue.clear()
+        feeds.clear()
+        replies.stop()
         runCatching { player?.stop() }
         runCatching { player?.release() }
         player = null
         if (mode == VoiceMode.PLAYING) mode = VoiceMode.IDLE
     }
 
-    private suspend fun drain() {
-        speaking = true
-        while (queue.isNotEmpty()) {
-            val text = queue.removeFirst()
-            try {
-                val wav = api.speak(text)
-                if (mode == VoiceMode.RECORDING || mode == VoiceMode.TRANSCRIBING || !speakReplies) continue // the user started talking
-                val file = File(context.cacheDir, "reply.wav")
-                withContext(Dispatchers.IO) { file.writeBytes(wav) }
-                play(file)
-                withContext(Dispatchers.IO) { file.delete() }
-            } catch (e: ApiException) {
-                error = e.message
-            }
-        }
-        speaking = false
+    /** The audio of one piece. Empty when there is nothing in it a voice can say, which is not an error. */
+    private suspend fun fetchClip(text: String): ByteArray = try {
+        api.speak(text)
+    } catch (e: ApiException) {
+        if (e.status == 422) ByteArray(0) else throw e
     }
 
+    /** Write the audio to a temporary file, play it to the end, and delete it however that ends. */
+    private suspend fun playClip(wav: ByteArray) {
+        val file = File(context.cacheDir, "reply.wav")
+        try {
+            withContext(Dispatchers.IO) { file.writeBytes(wav) }
+            play(file)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) { file.delete() }
+        }
+    }
+
+    /** Play one clip to the end. Throws when the phone cannot play it, so the reason reaches the message bar. */
     private suspend fun play(file: File) = suspendCancellableCoroutine { cont ->
         val p = MediaPlayer()
         player = p
-        fun done() {
+        // Between two sentences of one reply the voice is still speaking: the queue says when nothing is left.
+        fun done(failure: Exception? = null) {
             runCatching { p.release() }
             if (player === p) player = null
-            if (mode == VoiceMode.PLAYING) mode = VoiceMode.IDLE
-            if (cont.isActive) cont.resume(Unit)
+            if (cont.isActive) if (failure == null) cont.resume(Unit) else cont.resumeWithException(failure)
         }
         try {
-            p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            // Media volume, the one the volume keys change, so the reply is as loud as everything else on the phone.
+            p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             p.setDataSource(file.absolutePath)
             p.setOnCompletionListener { done() }
-            p.setOnErrorListener { _, _, _ -> done(); true }
+            p.setOnErrorListener { _, what, extra -> done(IOException("the phone could not play the audio (error $what, $extra)")); true }
             p.prepare()
             mode = VoiceMode.PLAYING
             p.start()
         } catch (e: Exception) {
-            done()
+            done(e)
         }
         cont.invokeOnCancellation { done() }
     }

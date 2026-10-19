@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskRow } from '../../lib/api/types';
-import { groupTasks } from './grouping';
+import { groupTasks, orderSteps } from './grouping';
 
 const task = (id: string, minute: number, project: string, chat: string): TaskRow => ({
   task_id: id, chat_id: `c-${chat}`, project_id: `p-${project}`, state: 'completed', pause_state: 'none', instruction: id, summary: '',
@@ -29,5 +29,26 @@ describe('trace grouping', () => {
   it('labels tasks whose chat or project was deleted', () => {
     const orphan = { ...task('x', 9, 'Demo', 'Logs'), chat_title: null, project_name: null };
     expect(groupTasks([orphan], 'chat', 'newest')[0].label).toBe('Deleted project › Deleted chat');
+  });
+});
+
+describe('trace step order', () => {
+  const steps = [
+    { no: 1, tools: ['list', 'read'] },
+    { no: 2, tools: ['edit'] },
+    { no: 3, tools: [] },
+  ];
+
+  it('keeps the steps as they happened by default', () => {
+    expect(orderSteps(steps, 'first')).toBe(steps);
+  });
+
+  it('puts the last step and the last tool call of each step first, without changing the original', () => {
+    expect(orderSteps(steps, 'last')).toEqual([
+      { no: 3, tools: [] },
+      { no: 2, tools: ['edit'] },
+      { no: 1, tools: ['read', 'list'] },
+    ]);
+    expect(steps[0].tools).toEqual(['list', 'read']);
   });
 });

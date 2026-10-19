@@ -65,5 +65,5 @@ exclude = ["**/.venv", "**/__pycache__"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["contracts", "packages", "services", "launcher"]
+testpaths = ["contracts", "packages", "services", "launcher", "tests"]
 addopts = "--import-mode=importlib"

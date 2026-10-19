@@ -10,8 +10,9 @@ import os
 import pathlib
 import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
+from thursday_launcher.application.ports import ClosableProbe
 from thursday_launcher.application.shutdown import (
     PortKiller,
     clear_stop_request,
@@ -22,7 +23,6 @@ from thursday_launcher.application.shutdown import (
 )
 from thursday_launcher.application.supervisor import Supervisor
 from thursday_launcher.domain.supervision import ServiceSpec
-from thursday_launcher.infrastructure.processes import HttpHealthProbe
 from thursday_launcher.transport.console import NAME_WIDTH, Console, display_name
 
 
@@ -32,7 +32,14 @@ def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     sub.add_parser("up", help="start all services and keep them running (Ctrl+C or `thursday down` stops them)")
     sub.add_parser("down", help="stop all services, from any terminal")
     sub.add_parser("status", help="check each service's health once")
-    sub.add_parser("setup", help="create .env from .env.example if needed and generate the service token")
+    sub.add_parser("check", help="say what Thursday needs on this PC and what is missing")
+    setup = sub.add_parser(
+        "setup",
+        help="create .env if needed, generate the service token, offer the built-in llama.cpp, and check requirements",
+    )
+    setup.add_argument("--with-llamacpp", action="store_true", help="download the built-in llama.cpp without asking")
+    setup.add_argument("--update-llamacpp", action="store_true", help="replace llama.cpp with the newest build")
+    setup.add_argument("--skip-llamacpp", action="store_true", help="do not download llama.cpp, and do not ask")
     return parser.parse_args(argv)
 
 
@@ -80,8 +87,13 @@ async def run_up(supervisor: Supervisor, data_root: pathlib.Path, console: Conso
     return 0
 
 
-async def run_down(specs: Sequence[ServiceSpec], data_root: pathlib.Path, killer: PortKiller) -> int:
-    probe = HttpHealthProbe()
+async def run_down(
+    specs: Sequence[ServiceSpec],
+    data_root: pathlib.Path,
+    probe: ClosableProbe,
+    killer: PortKiller,
+    stop_leftovers: Callable[[], int],
+) -> int:
     try:
         outcome = await shut_down(specs, data_root, probe, killer)
     finally:
@@ -96,11 +108,13 @@ async def run_down(specs: Sequence[ServiceSpec], data_root: pathlib.Path, killer
         print("\nNothing was running.")
     else:
         print("\nAll services are stopped.")
+    leftover = stop_leftovers()
+    if leftover:
+        print(f"Stopped {leftover} llama.cpp server{'s' if leftover != 1 else ''} left running.")
     return 1 if failed else 0
 
 
-async def run_status(specs: Sequence[ServiceSpec]) -> int:
-    probe = HttpHealthProbe()
+async def run_status(specs: Sequence[ServiceSpec], probe: ClosableProbe) -> int:
     try:
         results = await asyncio.gather(*(probe.is_healthy(spec) for spec in specs))
     finally:

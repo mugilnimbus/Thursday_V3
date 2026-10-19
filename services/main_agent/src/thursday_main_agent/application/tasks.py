@@ -17,11 +17,11 @@ from thursday_contracts.approvals import ApprovalDecision
 from thursday_contracts.events import EventType
 from thursday_contracts.task_control import PauseState
 
-from thursday_main_agent.application.ports import Events
+from thursday_main_agent.application.ports import Events, TaskRecords
 from thursday_main_agent.application.runner import RunOutcome, TaskRunner
+from thursday_main_agent.application.worklog import compact_task
 from thursday_main_agent.domain.approvals import Approval, ApprovalStatus, TimeoutStreak
 from thursday_main_agent.domain.tasks import TaskPhase, TaskRecord
-from thursday_main_agent.infrastructure.store import Store
 
 log = logging.getLogger(__name__)
 Kick = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -48,12 +48,15 @@ def clip_result(text: str, limit: int = RESULT_LIMIT) -> str:
 
 
 class TaskService:
-    def __init__(self, store: Store, events: Events, runner: TaskRunner, timeouts_before_pause: int) -> None:
+    def __init__(self, store: TaskRecords, events: Events, runner: TaskRunner, timeouts_before_pause: int) -> None:
         self._store = store
         self._events = events
         self._runner = runner
         self._streak_limit = timeouts_before_pause
         self._kick: Kick | None = None
+        # The service has one model, and every task shares its window, so only one task runs at a time and
+        # the rest wait their turn. A task waiting for an approval has let go of its turn.
+        self._model_turn = asyncio.Lock()
         self.running: set[str] = set()
 
     def set_kick(self, kick: Kick) -> None:
@@ -80,9 +83,19 @@ class TaskService:
         )
 
     # --- lifecycle -----------------------------------------------------------------------
-    def create(self, task_id: str, chat_id: str, project_id: str, folder: str, instruction: str) -> TaskRecord:
+    def create(
+        self,
+        task_id: str,
+        chat_id: str,
+        project_id: str,
+        folder: str,
+        instruction: str,
+        request: str | None = None,
+    ) -> TaskRecord:
+        """`request` is the name of the request that starts the task. Raises `DuplicateRequest`, with nothing
+        recorded or announced, when a task was already started under it."""
         task = TaskRecord(task_id, chat_id, project_id, folder, instruction, datetime.now(UTC))
-        self._store.insert_task(task)
+        self._store.insert_task(task, request)
         self._events.publish(
             EventType.DELEGATION,
             {"instruction": instruction, "project_folder": folder},
@@ -97,17 +110,18 @@ class TaskService:
         task = self._task(task_id)
         if instruction is None and resume is None and not await self._runner.has_checkpoint(task_id):
             instruction = task.instruction  # stopped before its first step: start it from the beginning
-        task.phase = TaskPhase.WORKING
-        self._store.save_task(task)
-        self._state_event(task)
         self.running.add(task_id)
         try:
-            outcome = await self._runner.run(task, instruction=instruction, resume=resume)
-            for _ in range(MAX_RESUME_LOOPS):
-                approval = outcome.approval
-                if outcome.kind != "needs_approval" or approval is None or approval.status is ApprovalStatus.PENDING:
-                    break
-                outcome = await self._runner.run(self._task(task_id), resume={"approval_id": approval.approval_id})
+            if self._model_turn.locked():
+                task.phase = TaskPhase.SUBMITTED
+                self._store.save_task(task)
+                self._state_event(task, queued=True)
+            async with self._model_turn:
+                task = self._task(task_id)
+                task.phase = TaskPhase.WORKING
+                self._store.save_task(task)
+                self._state_event(task)
+                outcome = await self._run_to_outcome(task, instruction, resume)
         finally:
             self.running.discard(task_id)
         task = self._task(task_id)
@@ -123,10 +137,35 @@ class TaskService:
             await self.finish(task, TaskPhase.FAILED, outcome.text)
         return outcome
 
+    async def _run_to_outcome(self, task: TaskRecord, instruction: str | None, resume: object | None) -> RunOutcome:
+        """Run until the task needs something or ends. Whatever goes wrong becomes a failed outcome, never an
+        exception, so the task cannot be left looking like it is still working."""
+        try:
+            outcome = await self._runner.run(task, instruction=instruction, resume=resume)
+            for _ in range(MAX_RESUME_LOOPS):
+                approval = outcome.approval
+                if outcome.kind != "needs_approval" or approval is None or approval.status is ApprovalStatus.PENDING:
+                    break
+                outcome = await self._runner.run(self._task(task.task_id), resume={"approval_id": approval.approval_id})
+            return outcome
+        except Exception as exc:
+            log.exception("task %s stopped on an unexpected error", task.task_id)
+            return RunOutcome(
+                "failed",
+                f"The task stopped on an unexpected error ({type(exc).__name__}: {str(exc)[:300]}). "
+                "The details are in the main agent's log.",
+            )
+
     async def finish(self, task: TaskRecord, phase: TaskPhase, text: str) -> None:
         if not task.transcript_saved:
-            messages = await self._runner.task_messages(task)
-            self._store.append_transcript(task.chat_id, task.task_id, messages_to_dict(messages))
+            work = compact_task(task.instruction, await self._runner.task_messages(task), phase, clip_result(text))
+            self._store.append_transcript(task.chat_id, task.task_id, messages_to_dict(work))
+            kept = await self._runner.task_summary(task)
+            if kept is not None and kept[1] > task.history_len:
+                # The summary was written mid-task, so it covers part of this task as well as the history. The
+                # transcript now holds this task as two compact messages, so the summary is saved as covering the
+                # history only; the task's own record follows it in full and nothing is lost.
+                self._store.save_chat_summary(task.chat_id, task.history_len, kept[0])
         for approval in self._store.pending_approvals(task.task_id):
             approval.cancel()
             self._store.save_approval(approval)
@@ -135,6 +174,7 @@ class TaskService:
         task.phase = phase
         task.pause_state = PauseState.NONE
         self._store.save_task(task)
+        self._store.mark_ended(task.task_id, datetime.now(UTC))  # the retention period counts from here
         self._state_event(task, summary=clip_result(text))
         if phase is not TaskPhase.CANCELED:
             title = "Task finished" if phase is TaskPhase.COMPLETED else "Task failed"

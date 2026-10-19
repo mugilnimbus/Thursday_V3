@@ -106,6 +106,11 @@ export function spanText(range: string): string {
   return SPAN_TEXT[range] ?? range;
 }
 
+/** How long a model took to start answering: "0.08 s", "2.86 s", "14 s". */
+export function waitText(seconds: number): string {
+  return seconds >= 10 ? `${Math.round(seconds)} s` : `${seconds.toFixed(2)} s`;
+}
+
 /** "3 min ago" style age for a model call. */
 export function ago(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));

@@ -14,14 +14,23 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class ApiException(val status: Int, val code: String, message: String) : Exception(message) {
     val offline: Boolean get() = status == 0
-    val unauthorized: Boolean get() = status == 401
 }
+
+/**
+ * Why a call did not get through, in words that say what to check. The PC's name is known only inside Tailscale:
+ * a device whose Private DNS names a server of its own asks that server instead, which has never heard of the PC,
+ * although Tailscale is on and the PC is reachable.
+ */
+internal fun offlineWords(cause: IOException): String =
+    if (cause is UnknownHostException) "Cannot find your PC by its name. Check that Tailscale is on, and that Private DNS in this device's settings is off or automatic."
+    else "Cannot reach your PC. Check that Tailscale is on."
 
 /**
  * Typed calls to the gateway's proxy listener (reached through `tailscale serve`). Every call sends the
@@ -61,7 +70,8 @@ class GatewayApi(
     suspend fun createProject(name: String, folder: String) = Parse.project(obj("POST", "/v1/projects", JSONObject().put("name", name).put("folder", folder)))
     suspend fun folders(path: String): FolderListing {
         val o = obj("GET", "/v1/fs/folders?path=" + enc(path))
-        return FolderListing(o.optString("path"), o.str("parent"), o.optJSONArray("folders").mapObjects { FolderRef(it.optString("name"), it.optString("path")) }, o.optString("home"))
+        fun refs(key: String) = o.optJSONArray(key).mapObjects { FolderRef(it.optString("name"), it.optString("path")) }
+        return FolderListing(o.optString("path"), o.str("parent"), refs("folders"), o.optString("home"), refs("model_folders"))
     }
     suspend fun files(projectId: String, path: String, q: String?): List<FileEntry> =
         obj("GET", "/v1/projects/$projectId/files?path=" + enc(path) + (q?.takeIf { it.isNotBlank() }?.let { "&q=" + enc(it) } ?: ""))
@@ -75,6 +85,7 @@ class GatewayApi(
     suspend fun chats(projectId: String) = obj("GET", "/v1/projects/$projectId/chats").optJSONArray("chats").mapObjects(Parse::chat)
     suspend fun createChat(projectId: String) = Parse.chat(obj("POST", "/v1/projects/$projectId/chats", JSONObject()).put("last_activity", ""))
     suspend fun renameChat(chatId: String, title: String) = obj("PATCH", "/v1/chats/$chatId", JSONObject().put("title", title))
+    suspend fun setDirect(chatId: String, direct: Boolean) = obj("PATCH", "/v1/chats/$chatId", JSONObject().put("direct", direct)).optBoolean("direct", direct)
     suspend fun deleteChat(chatId: String) = obj("DELETE", "/v1/chats/$chatId")
 
     suspend fun messages(chatId: String, before: Long? = null): Pair<List<ChatMessage>, List<Pending>> {
@@ -91,9 +102,10 @@ class GatewayApi(
     suspend fun tasks(state: String, q: String?) =
         obj("GET", "/v1/tasks?state=$state" + (q?.takeIf { it.isNotBlank() }?.let { "&q=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: ""))
             .optJSONArray("tasks").mapObjects(Parse::task)
-    suspend fun task(taskId: String): Pair<TaskRow, List<app.thursday.domain.Event>> {
+    suspend fun task(taskId: String): TaskTrace {
         val o = obj("GET", "/v1/tasks/$taskId")
-        return Parse.task(o.getJSONObject("task")) to o.optJSONArray("trace").mapObjects { Parse.event(it.getLong("pos"), it.getJSONObject("event")) }
+        val events = o.optJSONArray("trace").mapObjects { Parse.event(it.getLong("pos"), it.getJSONObject("event")) }
+        return TaskTrace(Parse.task(o.getJSONObject("task")), events, o.optInt("omitted"))
     }
     suspend fun control(taskId: String, action: String) = obj("POST", "/v1/tasks/$taskId/$action", JSONObject())
 
@@ -113,15 +125,22 @@ class GatewayApi(
 
     suspend fun llm(agent: String) = Parse.llm(obj("GET", "/v1/agents/$agent/llm"))
     suspend fun putLlm(agent: String, changes: JSONObject) = obj("PUT", "/v1/agents/$agent/llm", changes)
-    suspend fun reloadKeys(agent: String) = Parse.llm(obj("POST", "/v1/agents/$agent/llm/reload-keys", JSONObject()))
+    suspend fun models(agent: String) = Parse.models(obj("GET", "/v1/agents/$agent/models"))
+    /** Stores the key for the agent's saved provider in the PC's credential store; an empty key removes it. */
+    suspend fun setKey(agent: String, key: String) = Parse.llm(obj("PUT", "/v1/agents/$agent/llm/key", JSONObject().put("key", key)))
     suspend fun model(agent: String, action: String) = Parse.llm(obj("POST", "/v1/agents/$agent/model/$action", null, slow))
     suspend fun prompt(agent: String) = obj("GET", "/v1/agents/$agent/prompt")
     suspend fun savePrompt(agent: String, text: String) = obj("PUT", "/v1/agents/$agent/prompt", JSONObject().put("text", text))
     suspend fun general() = obj("GET", "/v1/settings/general")
-    suspend fun saveGeneral(changes: JSONObject) = obj("PUT", "/v1/settings/general", changes)
     suspend fun backupSettings() = obj("GET", "/v1/settings/backup")
     suspend fun backupNow() = obj("POST", "/v1/backup", JSONObject(), slow)
     suspend fun speechAvailable(): Boolean = obj("GET", "/v1/speech").optBoolean("available")
+    /**
+     * The PC starts loading what the coming turn needs, and answers at once. `listen` is false for a typed message,
+     * where only the voice that reads the reply is worth a head start.
+     */
+    suspend fun warmSpeech(speak: Boolean, listen: Boolean = true) =
+        obj("POST", "/v1/speech/warm", JSONObject().put("speak", speak).put("listen", listen))
 
     /** Send a recorded clip; returns the text heard. */
     suspend fun transcribe(audio: ByteArray, mime: String): String {
@@ -168,7 +187,7 @@ class GatewayApi(
         val response = try {
             http.newCall(request).await()
         } catch (e: IOException) {
-            throw ApiException(0, "offline", "Cannot reach your PC. Check that Tailscale is on.")
+            throw ApiException(0, "offline", offlineWords(e))
         }
         response.use {
             val body = it.body?.bytes() ?: ByteArray(0)
@@ -184,7 +203,7 @@ class GatewayApi(
         val response = try {
             http.newCall(request).await()
         } catch (e: IOException) {
-            throw ApiException(0, "offline", "Cannot reach your PC. Check that Tailscale is on.")
+            throw ApiException(0, "offline", offlineWords(e))
         }
         response.use {
             val text = it.body?.string().orEmpty()

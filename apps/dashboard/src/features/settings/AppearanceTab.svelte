@@ -14,4 +14,11 @@
   <span>Face animation<br /><span class="caption">A face made of particles appears in a chat while Thursday listens, thinks and speaks. The line along the bottom stays either way.</span></span>
   <input type="checkbox" class="switch" aria-label="Face animation" checked={prefs.voiceFace} onchange={(e) => prefs.setVoiceFace(e.currentTarget.checked)} />
 </div>
+<div class="switch-row" style="max-width:640px">
+  <label for="msg-transparency">Message transparency<br /><span class="caption">How much of the face shows through the messages in a chat. 0% is solid, which is easiest to read.</span></label>
+  <span class="range-row">
+    <input id="msg-transparency" type="range" min="0" max="100" step="10" value={prefs.messageTransparency} oninput={(e) => prefs.setMessageTransparency(Number(e.currentTarget.value))} />
+    <b>{prefs.messageTransparency}%</b>
+  </span>
+</div>
 <p class="caption" style="margin:0">Saved in this browser only.</p>

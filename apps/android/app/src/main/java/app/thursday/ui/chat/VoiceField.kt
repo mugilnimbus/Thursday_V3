@@ -113,6 +113,9 @@ private class FaceDraw(val cloud: FaceCloud) {
     }
 }
 
+/** What a field shows. */
+enum class FieldParts { BOTH, FACE, LINE }
+
 /**
  * Voice agent presence, like the dashboard. It fills the conversation area behind the messages.
  *
@@ -125,11 +128,18 @@ private class FaceDraw(val cloud: FaceCloud) {
  * around the head are carried off on the breeze, and the face itself arrives on it and is blown away by it when the
  * agent goes idle.
  *
+ * [parts] says what this field shows. A chat draws two fields: the face behind its messages, and the line over
+ * them, where it lets the messages show through.
+ * `lineCentre` says where the line runs: how many pixels its middle is above the bottom of the field (left out, the
+ * line rests on the bottom).
  * The face is the cloud in assets/face-cloud.bin. Until the voice stage streams audio, a speech-like envelope drives
  * the speaking mouth. Frames stop when the screen is not composed, and people who turn animations off get stills.
  */
 @Composable
-fun VoiceField(state: Voice, level: Float = 0f, showFace: Boolean = true, modifier: Modifier = Modifier) {
+fun VoiceField(
+    state: Voice, level: Float = 0f, showFace: Boolean = true, modifier: Modifier = Modifier, lineCentre: Float? = null,
+    parts: FieldParts = FieldParts.BOTH,
+) {
     val dark = LocalPalette.current.dark
     val context = LocalContext.current
     val still = remember { Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }
@@ -140,7 +150,7 @@ fun VoiceField(state: Voice, level: Float = 0f, showFace: Boolean = true, modifi
     val memory = remember { FieldMemory() }
     // The line works at once; the face joins when its file has been read. Without it, the line carries on alone.
     val face by produceState<FaceDraw?>(null) {
-        value = withContext(Dispatchers.Default) {
+        if (parts != FieldParts.LINE) value = withContext(Dispatchers.Default) {
             runCatching { FaceDraw(parseFaceCloud(context.assets.open("face-cloud.bin").use { it.readBytes() }, FACE_PARTICLES)) }.getOrNull()
         }
     }
@@ -191,12 +201,12 @@ fun VoiceField(state: Voice, level: Float = 0f, showFace: Boolean = true, modifi
         val wind = breeze(t, mix.think)
         if (!still) m.drift += dt * 0.02f * wind.strength
 
-        val layout = fieldLayout(size.width, size.height, density)
+        val layout = fieldLayout(size.width, size.height, density, lineCentre)
         if (cloud != null && m.faceMix > 0f) {
             if (!dark) drawBackdrop(layout, m.faceMix)
             drawFace(cloud, m, layout, headPose(mix, t, loud), wind, t, dots)
         }
-        drawLine(line, m, layout, wind, t, loud, dark)
+        if (parts != FieldParts.FACE) drawLine(line, m, layout, wind, t, loud, dark)
     }
 }
 
@@ -217,7 +227,7 @@ private fun DrawScope.drawLine(line: List<LineParticle>, m: FieldMemory, layout:
     val wave = max(mix.listen, mix.speak)
     val rest = max(0f, 1 - mix.listen - mix.speak)
     val lineH = layout.lineHeight
-    val mid = size.height - lineH / 2
+    val mid = layout.lineMid
     val sound = FloatArray(3)
     val shade = if (dark) 1f else 0.6f // darker dots on a light page
     for (p in line) {

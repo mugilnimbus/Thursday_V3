@@ -1,5 +1,5 @@
-/* Arrange the task list for Trace: grouped by chat, by project, or flat, newest or oldest first.
-   Pure, so it is unit tested. */
+/* Arrange Trace: the task list grouped by chat, by project, or flat, newest or oldest first; and one task's
+   steps first to last or last to first. Pure, so it is unit tested. */
 
 import type { TaskRow } from '../../lib/api/types';
 
@@ -30,4 +30,15 @@ export function groupTasks(tasks: TaskRow[], by: GroupBy, order: Order): TaskGro
   }
   // Groups follow the same order as their first task: the group with the newest (or oldest) task comes first.
   return [...groups.values()];
+}
+
+export type StepOrder = 'first' | 'last';
+
+/**
+ * A task's steps in the order to show them. "last" puts the newest step on top and, inside each step, its newest
+ * tool call first, so the screen reads strictly from the latest thing back to the first.
+ */
+export function orderSteps<T extends { tools: unknown[] }>(steps: T[], order: StepOrder): T[] {
+  if (order === 'first') return steps;
+  return steps.map((step) => ({ ...step, tools: [...step.tools].reverse() })).reverse();
 }

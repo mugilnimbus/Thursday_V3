@@ -2,13 +2,14 @@ package app.thursday.domain
 
 import app.thursday.data.TaskRow
 
-/* Arrange the Trace task list: grouped by chat, by project, or flat. Mirrors the dashboard's grouping.ts. */
+/* Arrange Trace: the task list grouped by chat, by project, or flat, newest or oldest first; and one task's steps
+   first to last or last to first. Mirrors the dashboard's grouping.ts. */
 
 data class TaskGroup(val key: String, val label: String, val tasks: List<TaskRow>)
 
-/** Newest first; a group sits where its newest task is. An empty label means the flat list. */
-fun groupTasks(tasks: List<TaskRow>, by: String): List<TaskGroup> {
-    val sorted = tasks.sortedByDescending { it.createdAt }
+/** A group sits where its first task in the chosen order is. An empty label means the flat list. */
+fun groupTasks(tasks: List<TaskRow>, by: String, newestFirst: Boolean = true): List<TaskGroup> {
+    val sorted = if (newestFirst) tasks.sortedByDescending { it.createdAt } else tasks.sortedBy { it.createdAt }
     if (by == "none") return if (sorted.isEmpty()) emptyList() else listOf(TaskGroup("all", "", sorted))
     val groups = LinkedHashMap<String, MutableList<TaskRow>>()
     val labels = HashMap<String, String>()
@@ -20,3 +21,10 @@ fun groupTasks(tasks: List<TaskRow>, by: String): List<TaskGroup> {
     }
     return groups.map { (key, list) -> TaskGroup(key, labels.getValue(key), list) }
 }
+
+/**
+ * A task's steps in the order to show them. Last to first puts the newest step on top and, inside each step, its
+ * newest tool call first. `reverseTools` returns a copy of a step with its tool calls reversed.
+ */
+fun <T> orderSteps(steps: List<T>, lastFirst: Boolean, reverseTools: (T) -> T): List<T> =
+    if (lastFirst) steps.map(reverseTools).reversed() else steps

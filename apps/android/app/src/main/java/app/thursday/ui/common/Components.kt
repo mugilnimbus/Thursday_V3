@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.defaultMinSize
@@ -20,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -34,6 +34,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -157,6 +160,7 @@ fun Field(
     minLines: Int = 1,
     error: String? = null,
     help: String? = null,
+    secret: Boolean = false,
 ) {
     val p = LocalPalette.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Space.s1)) {
@@ -166,6 +170,9 @@ fun Field(
             textStyle = TextStyle(color = p.text, fontSize = if (mono) 14.sp else Type.base, fontFamily = if (mono) Type.mono else null),
             cursorBrush = SolidColor(p.accent),
             minLines = minLines,
+            singleLine = secret,
+            visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+            keyboardOptions = if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
             modifier = Modifier.fillMaxWidth(),
             decorationBox = { inner ->
                 Box(
@@ -250,5 +257,3 @@ fun Gauge(fraction: Double, label: String, color: Color, sizeDp: Dp = 168.dp) {
         }
     }
 }
-
-val ScreenPadding = PaddingValues(horizontal = Space.s4, vertical = Space.s3)

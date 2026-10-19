@@ -8,13 +8,17 @@ import signal
 import subprocess
 import sys
 import time
-from typing import IO
+from collections.abc import Callable, Sequence
+from typing import IO, TYPE_CHECKING
 
 import httpx
 from thursday_contracts.health import HEALTH_PATH
 from thursday_runtime.serve import LOCALHOST
 
 from thursday_launcher.domain.supervision import ServiceSpec
+
+if TYPE_CHECKING:
+    import psutil
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -54,11 +58,16 @@ class ChildProcess:
 class SubprocessStarter:
     """Starts each service with the launcher's own interpreter, from the repository root."""
 
-    def __init__(self, workdir: pathlib.Path, output_dir: pathlib.Path) -> None:
+    def __init__(
+        self, workdir: pathlib.Path, output_dir: pathlib.Path, before_start: Callable[[ServiceSpec], None] | None = None
+    ) -> None:
         self._workdir = workdir
         self._output_dir = output_dir
+        self._before_start = before_start
 
     def start(self, spec: ServiceSpec) -> ChildProcess:
+        if self._before_start is not None:
+            self._before_start(spec)  # for example: stop a model server the last run left behind
         # Captures anything printed before the service's own logging is configured (for example import errors).
         output = open(self._output_dir / f"{spec.name}.stdout.log", "ab")  # noqa: SIM115 - closed by ChildProcess
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
@@ -117,7 +126,8 @@ class PsutilPortKiller:
 
         try:
             process = psutil.Process(pid)
-            if "python" not in process.name().lower() and "thursday" not in process.name().lower():
+            words = " ".join([process.name(), *process.cmdline()]).lower()
+            if "thursday" not in words:
                 return False  # the recorded number now belongs to some other program
             family = [*process.children(recursive=True), process]
         except psutil.Error:
@@ -127,6 +137,43 @@ class PsutilPortKiller:
                 p.kill()
         psutil.wait_procs(family, timeout=5)
         return True
+
+    @staticmethod
+    def _is_ours(process: "psutil.Process", roots: Sequence[pathlib.Path]) -> bool:
+        """A llama.cpp server whose program file is inside one of Thursday's llama.cpp folders."""
+        import psutil
+
+        try:
+            if not process.name().lower().startswith("llama-server"):
+                return False
+            path = pathlib.Path(process.exe()).resolve()
+        except (psutil.Error, OSError):
+            return False
+        return any(root in path.parents for root in roots)
+
+    @staticmethod
+    def _roots(folders: Sequence[pathlib.Path]) -> list[pathlib.Path]:
+        return [folder.resolve() for folder in folders if str(folder) and folder.is_dir()]
+
+    def stop_llama(self, pid: int, folders: Sequence[pathlib.Path]) -> bool:
+        import psutil
+
+        try:
+            process = psutil.Process(pid)
+        except psutil.Error:
+            return False
+        if not self._is_ours(process, self._roots(folders)):
+            return False  # the recorded number now belongs to another program, or to LM Studio's own server
+        with contextlib.suppress(psutil.Error):
+            process.kill()
+        psutil.wait_procs([process], timeout=5)
+        return True
+
+    def llama_under(self, folders: Sequence[pathlib.Path]) -> list[int]:
+        import psutil
+
+        roots = self._roots(folders)
+        return [process.pid for process in psutil.process_iter() if self._is_ours(process, roots)]
 
 
 class MonotonicClock:

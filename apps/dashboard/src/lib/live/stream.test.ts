@@ -78,6 +78,20 @@ describe('stream client', () => {
     expect(sockets[1].url).toBe('ws://gw/v1/stream?after=5');
   });
 
+  it('a timer set before a stop does not close the socket of the next start', () => {
+    const { client, sockets, timers } = harness();
+    client.start(5);
+    sockets[0].open();
+    client.visibility(true);
+    const old = timers.at(-1)!;
+    client.stop();
+    client.start(5);
+    sockets[1].open();
+    old.fn();
+    expect(sockets[1].closed).toBe(false);
+    expect(client.state).toBe('live');
+  });
+
   it('passes ephemeral messages through without moving the cursor', () => {
     const { client, sockets } = harness();
     const kinds: string[] = [];

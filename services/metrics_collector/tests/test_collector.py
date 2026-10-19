@@ -58,3 +58,47 @@ def test_real_host_readings_are_sane() -> None:
     assert 0 <= cpu <= 100 and 0 < used <= total
     for gpu in host.gpus():
         assert 0 < gpu.vram_used_mb <= gpu.vram_total_mb
+
+
+def test_stored_data_is_measured_per_service_and_only_now_and_then(tmp_path) -> None:
+    from thursday_metrics_collector.infrastructure.disk import DataFolders
+
+    for name, files in (
+        ("main_agent", {"main_agent.sqlite": 3000, "checkpoints.sqlite": 9000, "checkpoints.sqlite-wal": 500}),
+        ("gateway", {"gateway.sqlite": 2000}),
+        ("speech", {"kokoro-v1.0.onnx": 50_000}),  # a program file, not data that grows
+    ):
+        (tmp_path / "services" / name).mkdir(parents=True)
+        for file, size in files.items():
+            (tmp_path / "services" / name / file).write_bytes(b"x" * size)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "gateway.log").write_bytes(b"x" * 700)
+    folders = DataFolders(tmp_path)
+    assert [(s.name, s.bytes) for s in folders.sizes()] == [("main_agent", 12_500), ("gateway", 2000), ("logs", 700)]
+    assert DataFolders(tmp_path / "missing").sizes() == []
+
+    class Counting:
+        calls = 0
+
+        def sizes(self):
+            self.calls += 1
+            return folders.sizes()
+
+    storage = Counting()
+    collector = Collector(
+        FakeHost(),
+        [],
+        "http://gateway",
+        "tok",
+        httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(204))),
+        storage,
+    )
+
+    async def twice() -> MetricsSample:
+        await collector.sample()
+        return await collector.sample()
+
+    sample = anyio.run(twice)
+    assert sum(s.bytes for s in sample.storage) == 15_200 and storage.calls == 1, (
+        "every sample carries it, measured once a minute"
+    )

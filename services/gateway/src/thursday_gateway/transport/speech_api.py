@@ -1,39 +1,36 @@
 """Speech for clients (`/v1/speech`): the gateway forwards to the local speech service.
 
-- `POST /v1/speech/transcribe`: body is the recorded audio; returns the text.
+- `POST /v1/speech/transcribe`: body is the recorded audio; returns the text. When the voice agent's model can
+  hear, it writes the words down itself (`by: voice_model`); otherwise, and whenever that fails, the speech
+  service's speech-to-text does (`by: whisper`).
 - `POST /v1/speech/speak`: `{text, voice?}`; returns WAV audio.
 - `GET /v1/speech`: whether speech is available, and the voices.
+- `POST /v1/speech/warm`: `{speak?, listen?}`; the microphone was pressed (or, with `listen` false, a typed
+  message will be read aloud), so start loading what the turn will need.
 Audio is never stored by the gateway; only the text that the user then sends becomes a message.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol
 
-import httpx
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
+from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
+from thursday_gateway.application.ports import SpeechService
+from thursday_gateway.application.talk_warmup import TalkWarmup
 from thursday_gateway.domain.model import InvalidInput
-from thursday_gateway.infrastructure.agents import AgentRefused, AgentUnavailable
 
 MAX_AUDIO_BYTES = 15 * 1024 * 1024
 
 
-class SpeechClient:
-    def __init__(self, base_url: str, token: SecretStr, client: httpx.AsyncClient | None = None) -> None:
-        self._base = base_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(10, read=300))
-        self._headers = {"Authorization": f"Bearer {token.get_secret_value()}"}
+class Hearer(Protocol):
+    async def hear(self, wav: bytes) -> dict[str, Any] | None: ...
 
-    async def call(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        try:
-            response = await self._client.request(method, f"{self._base}/v1{path}", headers=self._headers, **kwargs)
-        except httpx.HTTPError as exc:
-            raise AgentUnavailable(f"the speech service is not running ({type(exc).__name__})") from exc
-        if response.status_code >= 400:
-            detail = response.json().get("detail", "") if "json" in response.headers.get("content-type", "") else ""
-            raise AgentRefused(response.status_code, str(detail) or "the speech service refused the request")
-        return response
+
+class WarmIn(BaseModel):
+    speak: bool = False  # replies are read aloud, so the voice is needed too
+    listen: bool = True  # false for a typed message: nothing has to be heard
 
 
 class SpeakIn(BaseModel):
@@ -41,7 +38,12 @@ class SpeakIn(BaseModel):
     voice: str | None = Field(default=None, max_length=40)
 
 
-def build_speech_router(speech: SpeechClient, auth: Callable[..., Awaitable[None]]) -> APIRouter:
+def build_speech_router(
+    speech: SpeechService,
+    auth: Callable[..., Awaitable[None]],
+    voice: Hearer | None = None,
+    warmup: TalkWarmup | None = None,
+) -> APIRouter:
     r = APIRouter(prefix="/v1/speech", dependencies=[Depends(auth)])
 
     @r.get("")
@@ -58,7 +60,26 @@ def build_speech_router(speech: SpeechClient, auth: Callable[..., Awaitable[None
         audio = await request.body()
         if not audio:
             raise InvalidInput("the recording is empty")
-        return (await speech.call("POST", "/transcribe", content=audio)).json()
+        heard = await by_voice_model(audio)
+        if heard is not None:
+            return heard
+        return {**(await speech.call("POST", "/transcribe", content=audio)).json(), "by": "whisper"}
+
+    async def by_voice_model(audio: bytes) -> dict[str, Any] | None:
+        """The recording as WAV, heard by the voice model. None for any reason it cannot: the caller falls back."""
+        if voice is None:
+            return None
+        try:
+            wav = (await speech.call("POST", "/decode", content=audio)).content
+        except (AgentUnavailable, AgentRefused):
+            return None
+        return await voice.hear(wav)
+
+    @r.post("/warm", status_code=202)
+    async def warm(body: WarmIn) -> dict[str, Any]:
+        if warmup is not None:
+            warmup.start(body.speak, body.listen)
+        return {"warming": warmup is not None}
 
     @r.post("/speak")
     async def speak(body: SpeakIn) -> Response:

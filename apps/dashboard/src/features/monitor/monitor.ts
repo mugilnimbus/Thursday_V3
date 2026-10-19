@@ -10,6 +10,29 @@ export const SERVICE_LABEL: Record<string, string> = {
   main_agent: 'Main agent',
 };
 
+/** What the stored data of each service holds, in a few words. */
+export const STORAGE_LABEL: Record<string, string> = {
+  gateway: 'Gateway · chats and events',
+  main_agent: 'Main agent · tasks and saved steps',
+  voice_agent: 'Voice agent · conversations',
+  tool_server: 'Tool server · call logs',
+  logs: 'Log files',
+};
+
+/** A size as people read it: 154 MB, 1.2 GB. */
+export function bytesText(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return bytes >= 1e3 ? `${Math.round(bytes / 1e3)} kB` : `${bytes} B`;
+}
+
+/** Each service's stored data and the total, or null when the collector has not measured it. */
+export function storedData(sample: MetricsSample | null): { total: number; parts: { label: string; bytes: number }[] } | null {
+  const storage = sample?.storage ?? [];
+  if (!storage.length) return null;
+  return { total: storage.reduce((n, s) => n + s.bytes, 0), parts: storage.map((s) => ({ label: STORAGE_LABEL[s.name] ?? s.name, bytes: s.bytes })) };
+}
+
 export function service(sample: MetricsSample | null, name: string): ServiceSample | undefined {
   return sample?.services.find((s) => s.name === name);
 }

@@ -3,6 +3,7 @@
 <script lang="ts">
   import { router } from '../../lib/state/router.svelte';
   import { isTerminal, liveLine, type TaskView } from '../../lib/state/timeline';
+  import CopyButton from '../../lib/ui/CopyButton.svelte';
   import Icon from '../../lib/ui/Icon.svelte';
   import Markdown from '../../lib/ui/Markdown.svelte';
 
@@ -40,6 +41,9 @@
       {#if live}<li class={TONE[live.tone]}>{live.text}</li>{/if}
     </ol>
     {#if task.summary}<div class="task-result"><Markdown text={task.summary} /></div>{/if}
-    <button class="btn plain task-trace" onclick={() => router.go({ name: 'trace', taskId: task.taskId })}>Open full trace</button>
+    <div class="task-actions">
+      <button class="btn plain task-trace" onclick={() => router.go({ name: 'trace', taskId: task.taskId })}>Open full trace</button>
+      {#if task.summary}<CopyButton text={task.summary} what="result" />{/if}
+    </div>
   {/if}
 </div>

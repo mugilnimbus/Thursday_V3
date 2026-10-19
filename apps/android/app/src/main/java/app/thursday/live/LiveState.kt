@@ -175,6 +175,20 @@ class LiveState(
         chats.update { all -> all.mapValues { (_, list) -> list.map { if (it.id == chatId) it.copy(title = title) else it } } }
     }
 
+    /** Turn "send straight to the main agent" on or off for a chat. Shown at once, and put back if the PC says no. */
+    suspend fun setChatDirect(chatId: String, direct: Boolean): String? {
+        fun show(value: Boolean) = chats.update { all -> all.mapValues { (_, list) -> list.map { if (it.id == chatId) it.copy(direct = value) else it } } }
+        val before = chat(chatId)?.second?.direct ?: false
+        show(direct)
+        return try {
+            show(api.setDirect(chatId, direct))
+            null
+        } catch (e: ApiException) {
+            show(before)
+            e.message
+        }
+    }
+
     suspend fun deleteChat(chatId: String) {
         api.deleteChat(chatId)
         chats.update { all -> all.mapValues { (_, list) -> list.filter { it.id != chatId } } }

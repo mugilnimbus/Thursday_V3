@@ -1,16 +1,16 @@
 """A2A surface of the main agent, built on the a2a-sdk (spike S1).
 
-- The executor maps run outcomes to A2A states: approval -> INPUT_REQUIRED with an
-  ApprovalRequest data part; pause -> WORKING with `pause_state` metadata; done ->
-  result artifact and COMPLETED; failure -> FAILED.
 - The ingress guard sits in front of the SDK dispatcher: service token, the task-control
   extension (PauseTask, ResumeTask), approval answers (first answer wins, checked before
-  the SDK sees them), no extra messages to running tasks, project metadata on new tasks.
+  the SDK sees them), no extra messages to running tasks, project metadata on new tasks,
+  no new task in a deleted chat, and one task per request name (a request sent again is
+  answered with the task it already started).
 - Internal "kicks" (approval timeout, resume, recovery) enter through the SDK in process
   with a flag no remote caller can set.
-- Pushes are filtered to terminal and input states.
+- What the SDK then runs, and which pushes go out, is in `a2a_executor`.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -18,18 +18,13 @@ import uuid
 from typing import Any
 
 import httpx
-from a2a.helpers.proto_helpers import get_data_parts, get_message_text, new_data_part, new_task_from_user_message
-from a2a.server.agent_execution.agent_executor import AgentExecutor
-from a2a.server.agent_execution.context import RequestContext
+from a2a.helpers.proto_helpers import new_data_part
 from a2a.server.context import ServerCallContext
-from a2a.server.events.event_queue import EventQueue
 from a2a.server.request_handlers.default_request_handler_v2 import DefaultRequestHandlerV2
 from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.server.routes.jsonrpc_dispatcher import JsonRpcDispatcher
-from a2a.server.tasks.base_push_notification_sender import BasePushNotificationSender
 from a2a.server.tasks.database_push_notification_config_store import DatabasePushNotificationConfigStore
 from a2a.server.tasks.database_task_store import DatabaseTaskStore
-from a2a.server.tasks.task_updater import TaskUpdater
 from a2a.types.a2a_pb2 import (
     AgentCapabilities,
     AgentCard,
@@ -38,14 +33,10 @@ from a2a.types.a2a_pb2 import (
     AgentSkill,
     HTTPAuthSecurityScheme,
     Message,
-    Part,
     Role,
     SecurityScheme,
     SendMessageConfiguration,
     SendMessageRequest,
-    Task,
-    TaskState,
-    TaskStatusUpdateEvent,
 )
 from google.protobuf.json_format import MessageToDict
 from pydantic import SecretStr, ValidationError
@@ -55,6 +46,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute, Route
 from thursday_contracts.approvals import APPROVAL_ANSWER_KIND, ApprovalAnswer
 from thursday_contracts.task_control import (
+    EXTENSION_NOT_ACTIVATED_CODE,
     EXTENSIONS_HEADER,
     PAUSE_TASK_METHOD,
     RESUME_TASK_METHOD,
@@ -64,121 +56,27 @@ from thursday_contracts.task_control import (
     TaskControlResult,
 )
 
-from thursday_main_agent.application.runner import RunOutcome
-from thursday_main_agent.application.tasks import TaskService, UnknownTask, clip_result
+from thursday_main_agent.application.ports import TaskLookup
+from thursday_main_agent.application.tasks import TaskService, UnknownTask
 from thursday_main_agent.domain.approvals import ApprovalAlreadyResolved
 from thursday_main_agent.domain.tasks import TaskNotControllable
-from thursday_main_agent.infrastructure.store import Store
+from thursday_main_agent.transport.a2a_executor import (
+    INTERNAL_FLAG,
+    INTERNAL_KIND,
+    META_PROJECT_FOLDER,
+    META_PROJECT_ID,
+    META_REQUEST,
+    MainAgentExecutor,
+    RelevantPushSender,
+)
 
 log = logging.getLogger(__name__)
-INTERNAL_KIND = "thursday.internal"
-INTERNAL_FLAG = "thursday_internal"
-META_PROJECT_ID = "thursday.project_id"
-META_PROJECT_FOLDER = "thursday.project_folder"
 META_ANSWERED_BY = "thursday.answered_by"
 APPROVAL_ALREADY_RESOLVED_CODE = -32041
 UNSUPPORTED_OPERATION_CODE = -32004
 INVALID_PARAMS_CODE = -32602
-PUSH_STATES = {
-    TaskState.TASK_STATE_COMPLETED,
-    TaskState.TASK_STATE_FAILED,
-    TaskState.TASK_STATE_CANCELED,
-    TaskState.TASK_STATE_REJECTED,
-    TaskState.TASK_STATE_INPUT_REQUIRED,
-    TaskState.TASK_STATE_AUTH_REQUIRED,
-}
-
-
-def agent_message(task_id: str, context_id: str, text: str, data: dict[str, Any] | None = None) -> Message:
-    parts = [Part(text=text)]
-    if data is not None:
-        parts.append(new_data_part(data))
-    return Message(
-        role=Role.ROLE_AGENT, message_id=str(uuid.uuid4()), task_id=task_id, context_id=context_id, parts=parts
-    )
-
-
-class MainAgentExecutor(AgentExecutor):
-    def __init__(self, service: TaskService, store: Store) -> None:
-        self._service = service
-        self._store = store
-
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        message = context.message
-        assert message is not None
-        current = context.current_task
-        if current is None:
-            task = new_task_from_user_message(message)
-            await event_queue.enqueue_event(task)
-            meta = MessageToDict(message.metadata) if message.HasField("metadata") else {}
-            instruction = get_message_text(message)
-            self._service.create(
-                task.id, task.context_id, meta[META_PROJECT_ID], meta[META_PROJECT_FOLDER], instruction
-            )
-            updater = TaskUpdater(event_queue, task.id, task.context_id)
-            await updater.start_work()
-            outcome = await self._service.drive(task.id, instruction=instruction)
-        else:
-            updater = TaskUpdater(event_queue, current.id, current.context_id)
-            record = self._store.get_task(current.id)
-            if record is None:
-                await updater.failed(
-                    agent_message(current.id, current.context_id, "This task is unknown to the agent.")
-                )
-                return
-            data = next(iter(get_data_parts(message.parts)), {}) or {}
-            internal = context.call_context.state.get(INTERNAL_FLAG) is True and data.get("kind") == INTERNAL_KIND
-            await updater.start_work()
-            if internal and data.get("action") == "start":
-                outcome = await self._service.drive(current.id, instruction=record.instruction)
-            elif internal and data.get("action") == "recover":
-                outcome = await self._service.drive(current.id)
-            else:
-                outcome = await self._service.drive(current.id, resume={"reason": data.get("action") or "answer"})
-        await self._publish(outcome, updater)
-
-    async def _publish(self, outcome: RunOutcome, updater: TaskUpdater) -> None:
-        task_id, context_id = updater.task_id, updater.context_id
-        if outcome.kind == "needs_approval" and outcome.approval is not None:
-            a = outcome.approval
-            data = {
-                "kind": "thursday.approval_request",
-                "approval_id": a.approval_id,
-                "task_id": a.task_id,
-                "chat_id": a.chat_id,
-                "tool": a.tool,
-                "summary": a.summary,
-                "arguments": a.arguments,
-                "expires_at": a.expires_at.isoformat(),
-            }
-            await updater.requires_input(agent_message(task_id, context_id, f"Approval needed: {a.summary}", data))
-        elif outcome.kind == "paused":
-            await updater.update_status(TaskState.TASK_STATE_WORKING, metadata={"pause_state": "paused"})
-        elif outcome.kind == "completed":
-            await updater.add_artifact([Part(text=outcome.text or "Done.")], name="result")
-            await updater.complete(agent_message(task_id, context_id, clip_result(outcome.text or "Done.")))
-        else:
-            await updater.failed(agent_message(task_id, context_id, outcome.text or "The task failed."))
-
-    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        task = context.current_task
-        assert task is not None
-        await self._service.canceled(task.id)
-        await TaskUpdater(event_queue, task.id, task.context_id).cancel(
-            agent_message(task.id, task.context_id, "Stopped by the user.")
-        )
-
-
-class RelevantPushSender(BasePushNotificationSender):
-    """Push only what the voice agent acts on: terminal and input-required states."""
-
-    async def send_notification(self, task_id: str, event: Any) -> None:
-        if isinstance(event, (Task, TaskStatusUpdateEvent)):
-            state = event.status.state
-        else:
-            return
-        if state in PUSH_STATES:
-            await super().send_notification(task_id, event)
+PARSE_ERROR_CODE = -32700
+INVALID_REQUEST_CODE = -32600
 
 
 def rpc_error(request_id: object, code: int, message: str) -> JSONResponse:
@@ -187,7 +85,7 @@ def rpc_error(request_id: object, code: int, message: str) -> JSONResponse:
 
 class A2AServer:
     def __init__(
-        self, service: TaskService, store: Store, db_url: str, base_url: str, token: SecretStr, version: str
+        self, service: TaskService, store: TaskLookup, db_url: str, base_url: str, token: SecretStr, version: str
     ) -> None:
         self._service = service
         self._store = store
@@ -254,6 +152,13 @@ class A2AServer:
         context = ServerCallContext(state={INTERNAL_FLAG: True, "headers": {"A2A-Version": "1.0"}})
         await self.handler.on_message_send(request, context)
 
+    async def forget(self, task_id: str) -> None:
+        """Remove the protocol's own record of a task and its push address. A record that is not there is fine."""
+        with contextlib.suppress(Exception):
+            await self.task_store.delete(task_id, None)  # pyright: ignore[reportArgumentType]
+        with contextlib.suppress(Exception):
+            await self.push_store.delete_info(task_id, None)  # pyright: ignore[reportArgumentType]
+
     async def aclose(self) -> None:
         await self.handler.aclose()
         await self._push_client.aclose()
@@ -266,21 +171,38 @@ class A2AServer:
         try:
             body = json.loads(await request.body())
         except ValueError:
-            return rpc_error(None, -32700, "parse error")
+            return rpc_error(None, PARSE_ERROR_CODE, "parse error")
         if not isinstance(body, dict):
-            return rpc_error(None, -32600, "batch requests are not supported")
+            return rpc_error(None, INVALID_REQUEST_CODE, "batch requests are not supported")
         request_id, method, params = body.get("id"), body.get("method"), body.get("params") or {}
         if method in (PAUSE_TASK_METHOD, RESUME_TASK_METHOD):
             return await self._task_control(request, request_id, method, params)
         if method in ("SendMessage", "SendStreamingMessage"):
-            refusal = self._check_message(request_id, params.get("message") or {})
+            message = params.get("message") or {}
+            refusal = self._check_message(request_id, message)
             if refusal is not None:
                 return refusal
+            repeated = await self._already_accepted(request_id, message)
+            if repeated is not None:
+                return repeated
         return await self._dispatcher.handle_requests(request)  # pyright: ignore[reportReturnType]
+
+    async def _already_accepted(self, request_id: object, message: dict[str, Any]) -> JSONResponse | None:
+        """A new task whose request name is already known is the same request sent again: its first answer was
+        lost on the way. The task it started is given back, in the shape of a first answer, and nothing new starts."""
+        name = (message.get("metadata") or {}).get(META_REQUEST)
+        if message.get("taskId") or not isinstance(name, str) or not name:
+            return None
+        task_id = self._store.task_for_request(name)
+        task = await self.task_store.get(task_id, None) if task_id else None  # pyright: ignore[reportArgumentType]
+        if task is None:
+            return None
+        log.info("request %s was sent again; answering with task %s", name, task_id)
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": {"task": MessageToDict(task)}})
 
     async def _task_control(self, request: Request, request_id: object, method: str, params: dict) -> JSONResponse:
         if TASK_CONTROL_EXTENSION_URI not in request.headers.get(EXTENSIONS_HEADER, ""):
-            return rpc_error(request_id, -32601, "task-control extension not activated")
+            return rpc_error(request_id, EXTENSION_NOT_ACTIVATED_CODE, "task-control extension not activated")
         task_id = str(params.get("id", ""))
         try:
             if method == PAUSE_TASK_METHOD:
@@ -341,4 +263,6 @@ class A2AServer:
             )
         if not os.path.isabs(folder) or not os.path.isdir(folder):
             return rpc_error(request_id, INVALID_PARAMS_CODE, "project folder does not exist")
+        if self._store.chat_deleted(str(message["contextId"])):
+            return rpc_error(request_id, UNSUPPORTED_OPERATION_CODE, "this chat was deleted")
         return None

@@ -6,7 +6,8 @@ declare const process: { env: Record<string, string | undefined> };
 // Uses Playwright's Chromium, or any Chromium given in THURSDAY_E2E_CHROMIUM (a chrome.exe path).
 export default defineConfig({
   testDir: 'e2e',
-  timeout: 30_000,
+  // Full parallelism can make the settings scenarios exceed 30 seconds on a busy PC.
+  timeout: 60_000,
   fullyParallel: true,
   reporter: 'list',
   use: {

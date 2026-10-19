@@ -19,7 +19,8 @@ data class Event(
 
 enum class Tone { OK, WARN, RUN, BAD, INFO }
 
-data class TaskLine(val text: String, val tone: Tone, val seconds: Double)
+/** `callKey` ties a tool call's line to its events: it is added when the call is requested and updated when it ends. */
+data class TaskLine(val text: String, val tone: Tone, val seconds: Double, val callKey: String? = null)
 
 data class TaskView(
     val taskId: String,
@@ -30,6 +31,8 @@ data class TaskView(
     val summary: String,
     val lines: List<TaskLine>,
     val firstPos: Long,
+    /** Where the voice agent announced a task sent straight to the main agent: right after the user's own message. */
+    val directPos: Long? = null,
 ) {
     val terminal: Boolean get() = state in TERMINAL
 }
@@ -67,8 +70,13 @@ private class Builder(val taskId: String, val firstPos: Long, val startMs: Long)
     var pauseState = "none"
     var step = 0
     var summary = ""
+    var directPos: Long? = null
     val lines = mutableListOf<TaskLine>()
-    fun build() = TaskView(taskId, instruction, state, pauseState, step, summary, lines.toList(), firstPos)
+    fun build(): TaskView {
+        // A finished task has no call still running; one that never reported back is shown as unfinished.
+        val settled = if (state in TERMINAL) lines.map { if (it.tone == Tone.RUN) it.copy(text = "${it.text} → did not finish", tone = Tone.WARN) else it } else lines.toList()
+        return TaskView(taskId, instruction, state, pauseState, step, summary, settled, firstPos, directPos)
+    }
 }
 
 fun buildTasks(events: List<Event>): Map<String, TaskView> {
@@ -79,9 +87,12 @@ fun buildTasks(events: List<Event>): Map<String, TaskView> {
         val seconds = maxOf(0.0, (epochMillis(e.ts) - task.startMs) / 1000.0)
         val p = e.payload
         when (e.type) {
-            "delegation" -> if (e.source == "main" || task.instruction.isEmpty()) {
-                task.instruction = p["instruction"]?.toString() ?: task.instruction
-                if (e.source == "main") task.lines += TaskLine("Delegated “${task.instruction}”", Tone.OK, seconds)
+            "delegation" -> {
+                if (e.source == "voice" && p["by"] == "direct") task.directPos = e.pos
+                if (e.source == "main" || task.instruction.isEmpty()) {
+                    task.instruction = p["instruction"]?.toString() ?: task.instruction
+                    if (e.source == "main") task.lines += TaskLine("Delegated “${task.instruction}”", Tone.OK, seconds)
+                }
             }
             "task_state" -> {
                 task.state = p["state"]?.toString() ?: task.state
@@ -99,12 +110,19 @@ fun buildTasks(events: List<Event>): Map<String, TaskView> {
                 if (p["status"].toString().startsWith("error")) task.lines += TaskLine("Model call failed (${p["status"]}), retrying", Tone.BAD, seconds)
             }
             "tool_call" -> {
+                // The line appears the moment the call is requested (purple, pulsing) and turns green or red when it ends.
                 val status = p["status"].toString()
-                if (status != "requested" && status != "running") {
+                val callKey = p["call_key"]?.toString()
+                val tool = p["tool"].toString()
+                val call = "$tool ${shortArgs(p["arguments"])}".trim()
+                val open = if (callKey == null) -1 else task.lines.indexOfFirst { it.callKey == callKey }
+                if (status == "requested" || status == "running") {
+                    if (open < 0) task.lines += TaskLine(call, Tone.RUN, seconds, callKey)
+                } else {
                     val tone = when (status) { "ok" -> Tone.OK; "unknown" -> Tone.WARN; else -> Tone.BAD }
-                    val tool = p["tool"].toString()
                     val result = if (status == "unknown") "outcome unknown after a restart" else summarize(tool, p["result"])
-                    task.lines += TaskLine("$tool ${shortArgs(p["arguments"])} → $result".trim(), tone, seconds)
+                    val done = TaskLine("$call → $result", tone, seconds, callKey) // the time shown is when it ended
+                    if (open >= 0) task.lines[open] = done else task.lines += done
                 }
             }
             "approval_requested" -> task.lines += TaskLine("Asked: ${p["summary"]}", Tone.WARN, seconds)
@@ -128,7 +146,8 @@ fun liveLine(task: TaskView): TaskLine? = when {
     else -> TaskLine("Working…", Tone.RUN, 0.0)
 }
 
-data class AgentStats(val tokensPerSecond: Int?, val contextPercent: Int?, val contextLength: Int?)
+/** `contextTokens` is what the agent sent in its last call: how much of the window is in use. */
+data class AgentStats(val tokensPerSecond: Int?, val contextTokens: Int?, val contextLength: Int?)
 
 fun agentStats(events: List<Event>, agent: String): AgentStats {
     val e = events.lastOrNull { it.type == "llm_call" && it.payload["agent"] == agent && it.payload["status"] == "ok" }
@@ -136,11 +155,15 @@ fun agentStats(events: List<Event>, agent: String): AgentStats {
     val length = (e.payload["context_length"] as? Number)?.toInt()
     val input = ((e.payload["usage"] as? Map<*, *>)?.get("input_tokens") as? Number)?.toInt()
     val tps = (e.payload["tokens_per_second"] as? Number)?.toDouble()
-    return AgentStats(
-        tps?.let { Math.round(it).toInt() },
-        if (length != null && length > 0 && input != null) minOf(100, Math.round(input * 100.0 / length).toInt()) else null,
-        length,
-    )
+    return AgentStats(tps?.let { Math.round(it).toInt() }, input, length)
+}
+
+/** "4412/16384": tokens in use out of the window, as far as each is known. */
+fun contextText(used: Int?, window: Int?): String = when {
+    used != null && used > 0 && window != null && window > 0 -> "$used/$window"
+    used != null && used > 0 -> "$used tokens"
+    window != null && window > 0 -> "–/$window"
+    else -> ""
 }
 
 fun formatContext(length: Int?): String = when {

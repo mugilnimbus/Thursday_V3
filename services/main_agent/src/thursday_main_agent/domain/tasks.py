@@ -27,6 +27,14 @@ class TaskNotControllable(Exception):
     pass
 
 
+class DuplicateRequest(Exception):
+    """A task was already started under this request name. `task_id` is that task."""
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"this request was already accepted as task {task_id}")
+        self.task_id = task_id
+
+
 @dataclass(slots=True)
 class TaskRecord:
     task_id: str

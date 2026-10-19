@@ -2,6 +2,7 @@ package app.thursday
 
 import app.thursday.data.TaskRow
 import app.thursday.domain.groupTasks
+import app.thursday.domain.orderSteps
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -24,5 +25,22 @@ class GroupingTest {
         assertEquals(listOf("Test" to 1, "Demo" to 3), groupTasks(tasks, "project").map { it.label to it.tasks.size })
         assertEquals(listOf("b", "d", "c", "a"), groupTasks(tasks, "none").single().tasks.map { it.id })
         assertEquals(emptyList<Any>(), groupTasks(emptyList(), "chat"))
+    }
+
+    @Test
+    fun oldestFirstReversesTheTasksAndTheGroups() {
+        val groups = groupTasks(tasks, "chat", newestFirst = false)
+        assertEquals(listOf("Demo › Logs", "Demo › Notes", "Test › Game"), groups.map { it.label })
+        assertEquals(listOf("a", "c"), groups[0].tasks.map { it.id })
+    }
+
+    @Test
+    fun stepsCanBeShownLastToFirstWithEachStepsToolCallsReversedToo() {
+        val steps = listOf(1 to listOf("list", "read"), 2 to listOf("edit"), 3 to emptyList())
+        assertEquals(steps, orderSteps(steps, lastFirst = false) { it.first to it.second.reversed() })
+        assertEquals(
+            listOf(3 to emptyList(), 2 to listOf("edit"), 1 to listOf("read", "list")),
+            orderSteps(steps, lastFirst = true) { it.first to it.second.reversed() },
+        )
     }
 }

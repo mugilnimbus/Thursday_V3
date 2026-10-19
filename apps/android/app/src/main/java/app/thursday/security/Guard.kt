@@ -9,8 +9,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 /**
- * Phone safeguards: the phone's own fingerprint or lock-screen credential before risky approvals, before
- * changing Settings, and to open the app when App lock is on. Nothing is stored; the system does the check.
+ * Phone safeguards: the phone's own fingerprint or lock-screen credential before allowing from an approval card
+ * (while that check is on), before changing Settings, and to open the app when App lock is on. Nothing is stored;
+ * the system does the check.
  */
 class Guard(private val activity: FragmentActivity) {
     suspend fun confirm(title: String, subtitle: String? = null): Boolean = suspendCancellableCoroutine { cont ->

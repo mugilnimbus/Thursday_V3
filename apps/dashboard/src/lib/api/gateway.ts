@@ -10,8 +10,10 @@ import type {
   ChatMessage,
   GeneralSettings,
   LlmCall,
+  LlmChange,
   LlmSettings,
   LoadParams,
+  ModelEntry,
   MetricsSample,
   Notification,
   PairingCode,
@@ -33,18 +35,19 @@ export const api = {
   chats: (projectId: string) => get<{ chats: Chat[] }>(`/v1/projects/${projectId}/chats`),
   createChat: (projectId: string, title?: string) => post<Chat>(`/v1/projects/${projectId}/chats`, { title }),
   renameChat: (chatId: string, title: string) => patch<Chat>(`/v1/chats/${chatId}`, { title }),
+  setDirect: (chatId: string, direct: boolean) => patch<Chat>(`/v1/chats/${chatId}`, { direct }),
   deleteChat: (chatId: string) => del<{ status: string }>(`/v1/chats/${chatId}`),
 
   messages: (chatId: string) => get<{ messages: ChatMessage[]; pending: PendingMessage[] }>(`/v1/chats/${chatId}/messages`),
   messagesBefore: (chatId: string, before: number) =>
     get<{ messages: ChatMessage[] }>(`/v1/chats/${chatId}/messages${query({ before })}`),
   send: (chatId: string, clientMessageId: string, text: string) =>
-    post<{ status: string; new: boolean }>(`/v1/chats/${chatId}/messages`, { client_message_id: clientMessageId, text }),
+    post<{ status: string; new: boolean; direct?: boolean }>(`/v1/chats/${chatId}/messages`, { client_message_id: clientMessageId, text }),
   timeline: (chatId: string, after = 0) => get<{ events: TimelineMessage[] }>(`/v1/chats/${chatId}/timeline${query({ after, limit: 1000 })}`),
   chatTasks: (chatId: string) => get<{ tasks: TaskRow[] }>(`/v1/chats/${chatId}/tasks`),
 
   tasks: (state: 'all' | 'running' | 'failed', q?: string) => get<{ tasks: TaskRow[] }>(`/v1/tasks${query({ state, q })}`),
-  task: (taskId: string) => get<{ task: TaskRow; trace: TimelineMessage[] }>(`/v1/tasks/${taskId}`),
+  task: (taskId: string) => get<{ task: TaskRow; trace: TimelineMessage[]; omitted?: number }>(`/v1/tasks/${taskId}`),
   control: (taskId: string, action: 'pause' | 'resume' | 'stop') => post<unknown>(`/v1/tasks/${taskId}/${action}`),
 
   approvals: (chatId?: string) => get<{ approvals: Approval[] }>(`/v1/approvals${query({ chat_id: chatId })}`),
@@ -63,9 +66,15 @@ export const api = {
   monitor: (range: '15m' | '1h' | '24h' | '7d') => get<{ latest: MetricsSample | null; history: MetricsSample[]; llm_calls: LlmCall[] }>(`/v1/monitor${query({ range })}`),
 
   llm: (agent: Agent) => get<LlmSettings>(`/v1/agents/${agent}/llm`),
-  updateLlm: (agent: Agent, changes: Partial<Omit<LlmSettings, 'load'>> & { load?: Partial<LoadParams> }) =>
+  models: (agent: Agent) => get<{ models: ModelEntry[]; error: string | null }>(`/v1/agents/${agent}/models`),
+  folders: (path: string) =>
+    get<{ path: string; parent: string | null; folders: { name: string; path: string }[]; home: string; model_folders?: { name: string; path: string }[] }>(
+      `/v1/fs/folders${query({ path })}`,
+    ),
+  updateLlm: (agent: Agent, changes: LlmChange) =>
     put<LlmSettings>(`/v1/agents/${agent}/llm`, changes),
-  reloadKeys: (agent: Agent) => post<LlmSettings>(`/v1/agents/${agent}/llm/reload-keys`),
+  /** Stores the key for the agent's saved provider in the PC's credential store; an empty key removes it. */
+  setKey: (agent: Agent, key: string) => put<LlmSettings>(`/v1/agents/${agent}/llm/key`, { key }),
   model: (agent: Agent, action: 'load' | 'reload' | 'unload', load?: Partial<LoadParams>) =>
     post<LlmSettings>(`/v1/agents/${agent}/model/${action}`, load, 900_000),
 

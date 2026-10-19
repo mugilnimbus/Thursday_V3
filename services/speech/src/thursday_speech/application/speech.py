@@ -2,12 +2,15 @@
 
 The engines are behind small interfaces so the service can be tested without models, and so a
 different engine can replace one later. Both engines are loaded on first use, run in a worker
-thread (they are CPU-bound), and take one request at a time each.
+thread (they are CPU-bound), and take one request at a time each. An engine nobody has used for a
+while is dropped from memory and loads again on the next use.
 """
 
 import asyncio
+import contextlib
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -68,10 +71,16 @@ def speakable(text: str) -> str:
     return cut[: end + 1] if end > MAX_SPEAK_CHARS // 2 else cut
 
 
+Decoder = Callable[[bytes], tuple[bytes, float]]
+"""A recording in any format to (WAV bytes, seconds)."""
+
+
 class SpeechService:
-    def __init__(self, transcriber: Transcriber, speaker: Speaker) -> None:
+    def __init__(self, transcriber: Transcriber, speaker: Speaker, decoder: Decoder | None = None) -> None:
         self._transcriber = transcriber
         self._speaker = speaker
+        self._decoder = decoder
+        self._last_listen = self._last_speak = time.monotonic()
         self._listen_lock = asyncio.Lock()
         self._speak_lock = asyncio.Lock()
         self.transcriptions = 0
@@ -88,6 +97,7 @@ class SpeechService:
             started = time.perf_counter()
             text, language, audio_seconds = await asyncio.to_thread(self._transcriber.transcribe, audio)
             seconds = time.perf_counter() - started
+            self._last_listen = time.monotonic()
         self.transcriptions += 1
         self.last_transcribe_seconds = round(seconds, 3)
         return Transcript(text.strip(), language, round(audio_seconds, 2), round(seconds, 3))
@@ -103,9 +113,66 @@ class SpeechService:
             started = time.perf_counter()
             wav, audio_seconds = await asyncio.to_thread(self._speaker.speak, plain, chosen)
             seconds = time.perf_counter() - started
+            self._last_speak = time.monotonic()
         self.spoken += 1
         self.last_speak_seconds = round(seconds, 3)
         return Speech(wav, round(audio_seconds, 2), round(seconds, 3), chosen)
+
+    async def to_wav(self, audio: bytes) -> tuple[bytes, float]:
+        """The recording as plain WAV, for a model that hears. Needs no speech engine."""
+        if self._decoder is None:
+            raise EngineUnavailable("this service cannot decode recordings")
+        if not audio:
+            raise SpeechError("the recording is empty")
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise SpeechError("the recording is too long")
+        return await asyncio.to_thread(self._decoder, audio)
+
+    async def warm(self, *, listen: bool, speak: bool) -> list[str]:
+        """Load the engines a spoken turn is about to need. Returns the names loaded now; an engine that is
+        loaded already, or cannot be warmed, is left as it is. Counts as a use, so it is not dropped again
+        before the turn arrives."""
+        loaded: list[str] = []
+        for wanted, name, engine, lock in (
+            (listen, "speech to text", self._transcriber, self._listen_lock),
+            (speak, "text to speech", self._speaker, self._speak_lock),
+        ):
+            warm = getattr(engine, "warm", None)
+            if not wanted or warm is None or getattr(engine, "loaded", False):
+                continue
+            async with lock:
+                await asyncio.to_thread(warm)
+            loaded.append(name)
+        now = time.monotonic()
+        if listen:
+            self._last_listen = now
+        if speak:
+            self._last_speak = now
+        return loaded
+
+    async def unload_idle(self, minutes: float) -> list[str]:
+        """Drop each engine that is loaded and has not been used for `minutes`. Returns the names dropped."""
+        dropped: list[str] = []
+        if not minutes:
+            return dropped
+        now = time.monotonic()
+        for name, engine, lock, last in (
+            ("speech to text", self._transcriber, self._listen_lock, self._last_listen),
+            ("text to speech", self._speaker, self._speak_lock, self._last_speak),
+        ):
+            unload = getattr(engine, "unload", None)
+            if unload is None or not getattr(engine, "loaded", False) or lock.locked() or now - last < minutes * 60:
+                continue
+            async with lock:
+                await asyncio.to_thread(unload)
+            dropped.append(name)
+        return dropped
+
+    async def idle_loop(self, stop: asyncio.Event, minutes: float, every: float = 30.0) -> None:
+        while not stop.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=every)
+            await self.unload_idle(minutes)
 
     async def voices(self) -> list[str]:
         """The voice names. Loading the voice model the first time can take a while, so it runs in a thread."""

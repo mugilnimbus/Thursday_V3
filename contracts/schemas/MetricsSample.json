@@ -92,6 +92,25 @@
       ],
       "title": "ServiceSample",
       "type": "object"
+    },
+    "StorageSample": {
+      "description": "How much disk one service's stored data uses (its databases), or the log files.",
+      "properties": {
+        "bytes": {
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "bytes"
+      ],
+      "title": "StorageSample",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -128,6 +147,13 @@
         "$ref": "#/$defs/ServiceSample"
       },
       "title": "Services",
+      "type": "array"
+    },
+    "storage": {
+      "items": {
+        "$ref": "#/$defs/StorageSample"
+      },
+      "title": "Storage",
       "type": "array"
     },
     "ts": {

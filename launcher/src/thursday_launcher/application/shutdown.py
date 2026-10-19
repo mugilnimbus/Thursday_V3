@@ -2,7 +2,8 @@
 
 Two steps. First ask the running supervisor to stop by creating a small request file it watches;
 it then shuts the services down cleanly. Then, for any service still answering (one left behind by
-a supervisor that was killed), stop the process that holds its port.
+a supervisor that was killed), stop the process that holds its port. A supervisor whose services do
+not answer yet (still starting, or failing again and again) is asked, and then stopped, the same way.
 """
 
 import asyncio
@@ -69,14 +70,15 @@ async def shut_down(
 
     up_before = await running()
     outcome = {str(s.name): "was not running" for s in specs}
-    if not up_before:
+    # A supervisor records itself while it runs and removes the record when it ends.
+    if not up_before and supervisor_pid(data_root) is None:
         return outcome
     request = data_root / STOP_FILE
     request.write_text("stop", encoding="utf-8")
     try:
         waited = 0.0
         still = up_before
-        while still and waited < wait_seconds:
+        while (still or supervisor_pid(data_root) is not None) and waited < wait_seconds:
             await asyncio.sleep(interval)
             waited += interval
             still = await running()
@@ -84,7 +86,7 @@ async def shut_down(
         clear_stop_request(data_root)
     for spec in up_before:
         outcome[str(spec.name)] = "stopped"
-    if still:
+    if still or supervisor_pid(data_root) is not None:
         # The supervisor did not react (it was killed, or is an older version): stop it first so it
         # cannot restart the services, then stop each service that is left.
         pid = supervisor_pid(data_root)

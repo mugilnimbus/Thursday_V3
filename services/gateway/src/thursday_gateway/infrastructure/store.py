@@ -1,9 +1,9 @@
-"""The gateway's SQLite store: projects, chats, outgoing messages, and the read model.
+"""The gateway's SQLite store: projects, chats, outgoing messages, and the log of the agents' events.
 
-The read model is a projection of the agents' events and can be rebuilt from their replay
-endpoints. Ingest deduplicates by `event_id`; each accepted event gets a gateway position
-(`pos`) that clients use as their WebSocket cursor. Projection happens in the same
-transaction as the insert, so a duplicate can never double-apply.
+Ingest deduplicates by `event_id`; each accepted event gets a gateway position (`pos`) that clients
+use as their WebSocket cursor. Each event is projected into the read model (`projection`) in the
+same transaction as the insert, so a duplicate can never double-apply. What clients ask about the
+read model is answered by `read_model`.
 """
 
 import json
@@ -15,20 +15,23 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from thursday_contracts.events import EventEnvelope, EventType
+from thursday_contracts.events import EventEnvelope
 
-from thursday_gateway.domain.model import Chat, Outgoing, OutgoingStatus, Project, RecordState
+from thursday_gateway.domain.model import CHAT_DELETED, Chat, Outgoing, OutgoingStatus, Project, RecordState
+from thursday_gateway.infrastructure.projection import project_event
 
 SCHEMA = """
 create table if not exists schema_version (version integer not null);
 create table if not exists projects (project_id text primary key, name text not null, folder text not null,
     created_at text not null, state text not null);
 create table if not exists chats (chat_id text primary key, project_id text not null, title text not null,
-    created_at text not null, state text not null, last_activity text not null);
+    created_at text not null, state text not null, last_activity text not null,
+    direct integer not null default 0);
 create index if not exists chats_project on chats(project_id);
 create table if not exists outgoing (id integer primary key autoincrement, chat_id text not null,
     client_message_id text not null, text text not null, status text not null, created_at text not null,
-    attempts integer not null default 0, error text not null default '', unique (chat_id, client_message_id));
+    attempts integer not null default 0, error text not null default '', direct integer not null default 0,
+    unique (chat_id, client_message_id));
 create table if not exists events (pos integer primary key autoincrement, event_id text not null unique,
     source text not null, seq integer not null, ts text not null, type text not null, project_id text,
     chat_id text, task_id text, payload text not null, received_at text not null);
@@ -46,7 +49,8 @@ create table if not exists notifications (id integer primary key autoincrement, 
     title text not null, body text not null, chat_id text, task_id text, created_at text not null,
     read integer not null default 0);
 create table if not exists messages (id integer primary key autoincrement, chat_id text not null, role text not null,
-    text text not null, client_message_id text, pos integer not null, created_at text not null);
+    text text not null, client_message_id text, pos integer not null, created_at text not null,
+    direct integer not null default 0);
 create index if not exists messages_chat on messages(chat_id, id);
 create table if not exists settings (key text primary key, value text not null);
 """
@@ -65,6 +69,12 @@ class Store:
         self._db.executescript(SCHEMA)
         if self._db.execute("select count(*) from schema_version").fetchone()[0] == 0:
             self._db.execute("insert into schema_version values (1)")
+        for table in ("chats", "outgoing", "messages"):  # databases made before direct mode
+            self._add_column(table, "direct", "integer not null default 0")
+
+    def _add_column(self, table: str, column: str, definition: str) -> None:
+        if column not in {r["name"] for r in self._db.execute(f"pragma table_info({table})")}:
+            self._db.execute(f"alter table {table} add column {column} {definition}")
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
@@ -125,22 +135,53 @@ class Store:
     def add_chat(self, c: Chat) -> None:
         with self.tx() as db:
             db.execute(
-                "insert into chats values (?,?,?,?,?,?)",
-                (c.chat_id, c.project_id, c.title, c.created_at.isoformat(), c.state.value, c.created_at.isoformat()),
+                "insert into chats (chat_id, project_id, title, created_at, state, last_activity, direct) "
+                "values (?,?,?,?,?,?,?)",
+                (
+                    c.chat_id,
+                    c.project_id,
+                    c.title,
+                    c.created_at.isoformat(),
+                    c.state.value,
+                    c.created_at.isoformat(),
+                    int(c.direct),
+                ),
             )
 
     def save_chat(self, c: Chat) -> None:
         with self.tx() as db:
-            db.execute("update chats set title = ?, state = ? where chat_id = ?", (c.title, c.state.value, c.chat_id))
+            db.execute(
+                "update chats set title = ?, state = ?, direct = ? where chat_id = ?",
+                (c.title, c.state.value, int(c.direct), c.chat_id),
+            )
 
     def chat(self, chat_id: str) -> Chat | None:
         rows = self.query("select * from chats where chat_id = ?", (chat_id,))
         return self._chat(rows[0]) if rows else None
 
-    def chats(self, project_id: str) -> list[sqlite3.Row]:
-        return self.query(
+    def begin_chat_delete(self, chat_id: str) -> None:
+        """Mark the chat as being deleted and fail the messages still waiting to be sent in it, in one step: from
+        here on nothing new starts in this chat."""
+        with self.tx() as db:
+            db.execute("update chats set state = 'deleting' where chat_id = ?", (chat_id,))
+            db.execute(
+                "update outgoing set status = 'failed', error = ? where chat_id = ? and status = 'queued'",
+                (CHAT_DELETED, chat_id),
+            )
+
+    def chats(self, project_id: str) -> list[dict[str, Any]]:
+        """A project's active chats, the most recently used first."""
+        rows = self.query(
             "select * from chats where project_id = ? and state = 'active' order by last_activity desc", (project_id,)
         )
+        return [dict(r) for r in rows]
+
+    def chat_titles(self) -> dict[str, str]:
+        """Every chat's title by id, including chats being deleted."""
+        return {r["chat_id"]: r["title"] for r in self.query("select chat_id, title from chats")}
+
+    def project_has_chats(self, project_id: str) -> bool:
+        return bool(self.query("select 1 from chats where project_id = ? limit 1", (project_id,)))
 
     def chats_in_state(self, state: RecordState) -> list[Chat]:
         return [self._chat(r) for r in self.query("select * from chats where state = ?", (state.value,))]
@@ -151,7 +192,12 @@ class Store:
     @staticmethod
     def _chat(r: sqlite3.Row) -> Chat:
         return Chat(
-            r["chat_id"], r["project_id"], r["title"], datetime.fromisoformat(r["created_at"]), RecordState(r["state"])
+            r["chat_id"],
+            r["project_id"],
+            r["title"],
+            datetime.fromisoformat(r["created_at"]),
+            RecordState(r["state"]),
+            bool(r["direct"]),
         )
 
     def purge_chat(self, chat_id: str) -> None:
@@ -200,17 +246,26 @@ class Store:
         return True
 
     # --- outgoing messages ---------------------------------------------------------------
-    def enqueue(self, chat_id: str, client_message_id: str, text: str) -> tuple[Outgoing, bool]:
-        """Idempotent on (chat, client_message_id). Returns the record and whether it is new."""
+    def enqueue(self, chat_id: str, client_message_id: str, text: str, direct: bool = False) -> tuple[Outgoing, bool]:
+        """Idempotent on (chat, client_message_id). Returns the record and whether there is work to do for it.
+
+        Sending a failed message again queues it again: the agents recognise the message by the same id,
+        so a part that already happened is not repeated.
+        """
         with self.tx() as db:
             existing = db.execute(
                 "select * from outgoing where chat_id = ? and client_message_id = ?", (chat_id, client_message_id)
             ).fetchone()
+            if existing and existing["status"] == "failed":
+                db.execute("update outgoing set status = 'queued', error = '' where id = ?", (existing["id"],))
+                row = db.execute("select * from outgoing where id = ?", (existing["id"],)).fetchone()
+                return self._outgoing(row), True
             if existing:
                 return self._outgoing(existing), False
             cursor = db.execute(
-                "insert into outgoing (chat_id, client_message_id, text, status, created_at) values (?,?,?,?,?)",
-                (chat_id, client_message_id, text, "queued", now_iso()),
+                "insert into outgoing (chat_id, client_message_id, text, status, created_at, direct) "
+                "values (?,?,?,?,?,?)",
+                (chat_id, client_message_id, text, "queued", now_iso(), int(direct)),
             )
             db.execute("update chats set last_activity = ? where chat_id = ?", (now_iso(), chat_id))
             row = db.execute("select * from outgoing where id = ?", (cursor.lastrowid,)).fetchone()
@@ -226,6 +281,9 @@ class Store:
                 "update outgoing set status = ?, error = ?, attempts = attempts + ? where id = ?",
                 (status.value, error[:300], int(attempt), out_id),
             )
+
+    def queued_count(self) -> int:
+        return int(self.query("select count(*) as n from outgoing where status = 'queued'")[0]["n"])
 
     def pending_outgoing(self, chat_id: str) -> list[Outgoing]:
         return [
@@ -246,6 +304,7 @@ class Store:
             datetime.fromisoformat(r["created_at"]),
             r["attempts"],
             r["error"],
+            bool(r["direct"]),
         )
 
     # --- ingest and projection -----------------------------------------------------------
@@ -289,7 +348,7 @@ class Store:
                     "last_seq = max(last_seq, excluded.last_seq)",
                     (event.source.value, event.seq),
                 )
-                self._project_event(db, pos, event)
+                project_event(db, pos, event)
                 accepted.append((pos, event))
         return accepted, duplicates
 
@@ -299,121 +358,7 @@ class Store:
     def last_pos(self) -> int:
         return int(self.query("select coalesce(max(pos), 0) as pos from events")[0]["pos"])
 
-    @staticmethod
-    def _project_event(db: sqlite3.Connection, pos: int, e: EventEnvelope) -> None:
-        p, ts = e.payload, e.ts.isoformat()
-        if e.chat_id:
-            db.execute("update chats set last_activity = ? where chat_id = ?", (ts, e.chat_id))
-        if e.type is EventType.DELEGATION and e.task_id:
-            db.execute(
-                "insert into tasks (task_id, chat_id, project_id, state, pause_state, instruction, created_at, "
-                "updated_at) values (?,?,?,?,?,?,?,?) on conflict(task_id) do update set "
-                "instruction = excluded.instruction",
-                (e.task_id, e.chat_id, e.project_id, "submitted", "none", str(p.get("instruction", "")), ts, ts),
-            )
-        elif e.type is EventType.TASK_STATE and e.task_id:
-            db.execute(
-                "insert into tasks (task_id, chat_id, project_id, state, pause_state, summary, created_at, "
-                "updated_at) values (?,?,?,?,?,?,?,?) on conflict(task_id) do update set state = excluded.state, "
-                "pause_state = excluded.pause_state, summary = case when excluded.summary != '' "
-                "then excluded.summary else tasks.summary end, updated_at = excluded.updated_at",
-                (
-                    e.task_id,
-                    e.chat_id,
-                    e.project_id,
-                    str(p.get("state", "")),
-                    str(p.get("pause_state", "none")),
-                    str(p.get("summary", "")),
-                    ts,
-                    ts,
-                ),
-            )
-        elif e.type is EventType.APPROVAL_REQUESTED:
-            db.execute(
-                "insert or ignore into approvals values (?,?,?,?,?,?,?,?,?,NULL)",
-                (
-                    p["approval_id"],
-                    p["task_id"],
-                    p["chat_id"],
-                    p["tool"],
-                    p["summary"],
-                    json.dumps(p.get("arguments", {})),
-                    p["expires_at"],
-                    "pending",
-                    ts,
-                ),
-            )
-            db.execute(
-                "insert into notifications (kind, title, body, chat_id, task_id, created_at) values (?,?,?,?,?,?)",
-                ("approval", "Approval needed", str(p["summary"])[:500], e.chat_id, e.task_id, ts),
-            )
-        elif e.type is EventType.APPROVAL_RESOLVED and p.get("approval_id"):
-            db.execute(
-                "update approvals set status = ?, resolved_at = ? where approval_id = ?",
-                (str(p.get("outcome")), ts, p["approval_id"]),
-            )
-        elif e.type is EventType.NOTIFICATION:
-            db.execute(
-                "insert into notifications (kind, title, body, chat_id, task_id, created_at) values (?,?,?,?,?,?)",
-                (
-                    str(p.get("kind", "info")),
-                    str(p.get("title", ""))[:200],
-                    str(p.get("body", ""))[:2000],
-                    e.chat_id,
-                    e.task_id,
-                    ts,
-                ),
-            )
-        elif e.type in (EventType.USER_MESSAGE, EventType.ASSISTANT_MESSAGE) and e.chat_id:
-            role = "user" if e.type is EventType.USER_MESSAGE else "assistant"
-            client_id = p.get("client_message_id")
-            db.execute(
-                "insert into messages (chat_id, role, text, client_message_id, pos, created_at) values (?,?,?,?,?,?)",
-                (e.chat_id, role, str(p.get("text", "")), client_id, pos, ts),
-            )
-            if role == "user" and client_id:
-                db.execute(
-                    "update outgoing set status = 'delivered' where chat_id = ? and client_message_id = ?",
-                    (e.chat_id, client_id),
-                )
-
-    # --- read model queries --------------------------------------------------------------
-    def events_after(self, pos: int, limit: int, chat_id: str | None = None) -> list[sqlite3.Row]:
-        if chat_id is None:
-            return self.query("select * from events where pos > ? order by pos limit ?", (pos, limit))
-        return self.query(
-            "select * from events where chat_id = ? and pos > ? order by pos limit ?", (chat_id, pos, limit)
-        )
-
-    def llm_calls(self, since: timedelta, limit: int = 2000) -> list[dict[str, Any]]:
-        """Successful model calls in the period, oldest first: when, which agent, speed, and context use."""
-        cutoff = (datetime.now(UTC) - since).isoformat()
-        rows = self.query(
-            "select ts, payload from (select pos, ts, payload from events where type = 'llm_call' and ts >= ? "
-            "order by pos desc limit ?) order by pos",
-            (cutoff, limit),
-        )
-        calls = []
-        for row in rows:
-            p = json.loads(row["payload"])
-            if p.get("status") != "ok":
-                continue
-            calls.append(
-                {
-                    "ts": row["ts"],
-                    "agent": p.get("agent"),
-                    "tokens_per_second": p.get("tokens_per_second"),
-                    "ttft_seconds": p.get("ttft_seconds"),
-                    "input_tokens": (p.get("usage") or {}).get("input_tokens"),
-                    "output_tokens": (p.get("usage") or {}).get("output_tokens"),
-                    "context_length": p.get("context_length"),
-                }
-            )
-        return calls
-
-    def task_events(self, task_id: str, limit: int = 2000) -> list[sqlite3.Row]:
-        return self.query("select * from events where task_id = ? order by pos limit ?", (task_id, limit))
-
+    # --- retention -----------------------------------------------------------------------
     def prune_events(self, older_than: timedelta) -> int:
         cutoff = (datetime.now(UTC) - older_than).isoformat()
         with self.tx() as db:

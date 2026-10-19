@@ -48,6 +48,7 @@
     <div class="hstack" style="justify-content:flex-end">
       <button class="btn plain" onclick={() => ui.answer(false)}>Cancel</button>
       <button class="btn" class:danger={q.danger} class:primary={!q.danger} onclick={() => ui.answer(true)}>{q.action}</button>
+      {#if q.save}<button class="btn primary" onclick={() => ui.answer('save')}>{q.save}</button>{/if}
     </div>
   </Dialog>
 {:else if dialog?.kind === 'rename-chat' && chat}

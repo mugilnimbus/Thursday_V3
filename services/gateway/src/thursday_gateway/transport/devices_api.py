@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from thursday_gateway.application.devices import DeviceService
-from thursday_gateway.infrastructure.tailnet import TailnetAddress
+from thursday_gateway.application.ports import PublicAddress
 
 
 class ClaimIn(BaseModel):
@@ -26,7 +26,7 @@ def pairing_uri(url: str, code: str) -> str:
     return "thursday://pair?" + urlencode({"url": url, "code": code})
 
 
-def build_pairing_router(devices: DeviceService, address: TailnetAddress) -> APIRouter:
+def build_pairing_router(devices: DeviceService, address: PublicAddress) -> APIRouter:
     r = APIRouter(prefix="/v1/devices")
 
     @r.post("/pairing", status_code=201)

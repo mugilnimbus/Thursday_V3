@@ -8,6 +8,7 @@ import pytest
 from pydantic import SecretStr
 from thursday_gateway.application.backup import BackupService, BackupSettings
 from thursday_gateway.domain.model import InvalidInput
+from thursday_gateway.infrastructure.backup_client import ServiceBackups
 from thursday_gateway.infrastructure.store import Store
 
 
@@ -26,10 +27,12 @@ def service(tmp_path: Path, keep: int = 2) -> tuple[BackupService, Path]:
     svc = BackupService(
         store,
         [tmp_path / "gateway.sqlite"],
-        {"main_agent": "http://main", "voice_agent": "http://voice"},
-        SecretStr("tok"),
+        ServiceBackups(
+            {"main_agent": "http://main", "voice_agent": "http://voice"},
+            SecretStr("tok"),
+            httpx.AsyncClient(transport=httpx.MockTransport(agents)),
+        ),
         BackupSettings(folder=str(folder), keep_copies=keep),
-        httpx.AsyncClient(transport=httpx.MockTransport(agents)),
     )
     return svc, folder
 
@@ -67,3 +70,48 @@ def test_backup_folder_must_be_absolute_and_chosen(tmp_path: Path) -> None:
     svc.save_settings(BackupSettings(folder=""))
     with pytest.raises(InvalidInput):
         anyio.run(svc.run)
+
+
+def complete_service(tmp_path: Path, keep: int) -> tuple[BackupService, Path, dict[str, bool]]:
+    """A backup whose one other service can be switched off."""
+    store = Store(tmp_path / "gateway.sqlite")
+    up = {"main": True}
+
+    def agents(request: httpx.Request) -> httpx.Response:
+        if not up["main"]:
+            raise httpx.ConnectError("down")
+        return httpx.Response(200, json={"service": "main_agent", "files": {"main_agent.sqlite": 10}})
+
+    folder = tmp_path / "backups"
+    svc = BackupService(
+        store,
+        [tmp_path / "gateway.sqlite"],
+        ServiceBackups(
+            {"main_agent": "http://main"}, SecretStr("tok"), httpx.AsyncClient(transport=httpx.MockTransport(agents))
+        ),
+        BackupSettings(folder=str(folder), keep_copies=keep),
+    )
+    return svc, folder, up
+
+
+def test_partial_backups_never_remove_the_last_complete_one(tmp_path: Path) -> None:
+    svc, folder, up = complete_service(tmp_path, keep=1)
+    good = anyio.run(svc.run)
+    assert good["complete"] is True
+    up["main"] = False
+    for _ in range(3):
+        assert anyio.run(svc.run)["complete"] is False
+    left = sorted(p.name for p in folder.iterdir())
+    assert Path(good["folder"]).name in left, "the copy that can be restored is still there"
+    assert len(left) == 2, "beside it, only the newest run is kept"
+    up["main"] = True
+    newer = anyio.run(svc.run)
+    assert [p.name for p in folder.iterdir()] == [Path(newer["folder"]).name], "a newer complete copy replaces it"
+
+
+def test_two_backups_in_the_same_second_get_folders_of_their_own(tmp_path: Path) -> None:
+    svc, folder, _ = complete_service(tmp_path, keep=5)
+    runs = [anyio.run(svc.run) for _ in range(3)]
+    names = [Path(r["folder"]).name for r in runs]
+    assert len(set(names)) == 3 and names == sorted(names), "each run has its own folder, in order"
+    assert all((folder / n / "manifest.json").exists() for n in names)

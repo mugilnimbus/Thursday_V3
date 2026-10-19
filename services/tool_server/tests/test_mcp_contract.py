@@ -120,3 +120,23 @@ async def test_session_keeps_state_between_commands(server, layout) -> None:
         await client.call_tool("shell.session.close", {"handle": handle})
     out = text(result)
     assert "42" in out and out.lower().rstrip().endswith("sub")
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("shell", {"command": "Invoke-WebRequest https://example.com/a.zip -OutFile a.zip"}),
+        ("shell.session.exec", {"handle": "sh-none", "command": "Remove-Item C:/Users -Recurse"}),
+    ],
+)
+async def test_a_command_on_the_deny_list_is_refused_without_asking(server, tool, arguments) -> None:
+    async with Client(server.mcp, elicitation_callback=refuse_auto_elicitation) as client:
+        try:
+            result = await client.session.call_tool(tool, arguments, allow_input_required=True)
+        except Exception as exc:  # the client may raise the tool's error
+            message = str(exc)
+        else:
+            assert not isinstance(result, InputRequiredResult), "the user is not asked"
+            assert result.is_error
+            message = text(result)
+    assert "Refused" in message and "cannot be approved away" in message

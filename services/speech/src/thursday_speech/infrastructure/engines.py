@@ -45,6 +45,15 @@ class WhisperTranscriber:
     def loaded(self) -> bool:
         return self._model is not None
 
+    def warm(self) -> None:
+        """Load the model now, so the first recording does not wait for it."""
+        self._load()
+
+    def unload(self) -> None:
+        with self._lock:
+            self._model = None
+        log.info("whisper model unloaded after a while without use")
+
     def transcribe(self, audio: bytes) -> tuple[str, str, float]:
         model = self._load()
         try:
@@ -104,8 +113,25 @@ class KokoroSpeaker:
                 log.info("kokoro loaded with %d voices", len(self._voices))
             return self._engine
 
-    def voices(self) -> list[str]:
+    def warm(self) -> None:
+        """Load the voice now, so the first reply does not wait for it."""
         self._load()
+
+    def unload(self) -> None:
+        with self._lock:
+            self._engine = None
+        log.info("kokoro unloaded after a while without use")
+
+    def voices(self) -> list[str]:
+        """The voice names. Read from the voices file when it is on disk, so asking for them loads nothing."""
+        if not self._voices and self._engine is None and self.files_present():
+            try:
+                with np.load(self._dir / "voices-v1.0.bin") as packed:
+                    self._voices = sorted(packed.files)
+            except (OSError, ValueError):
+                self._voices = []
+        if not self._voices:
+            self._load()
         return self._voices
 
     def speak(self, text: str, voice: str) -> tuple[bytes, float]:

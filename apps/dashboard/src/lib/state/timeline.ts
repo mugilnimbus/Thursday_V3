@@ -9,6 +9,8 @@ export interface TaskLine {
   text: string;
   tone: Tone;
   seconds: number;
+  /** A tool call's key: its line is added when the call is requested and updated when it ends. */
+  callKey?: string;
 }
 
 export interface TaskView {
@@ -90,11 +92,19 @@ export function buildTasks(events: EventEnvelope[]): Map<string, TaskView> {
           task.lines.push({ text: `Model call failed (${p.status}), retrying`, tone: 'bad', seconds });
         break;
       case 'tool_call': {
+        // The line appears the moment the call is requested (purple, pulsing) and turns green or red when it ends.
         const status = String(p.status);
-        if (status === 'requested' || status === 'running') break;
+        const callKey = p.call_key ? String(p.call_key) : undefined;
+        const open = callKey ? task.lines.find((l) => l.callKey === callKey) : undefined;
+        const call = `${p.tool} ${shortArgs(p.arguments)}`.trim();
+        if (status === 'requested' || status === 'running') {
+          if (!open) task.lines.push({ text: call, tone: 'run', seconds, callKey });
+          break;
+        }
         const tone: Tone = status === 'ok' ? 'ok' : status === 'unknown' ? 'warn' : 'bad';
         const result = status === 'unknown' ? 'outcome unknown after a restart' : summarize(String(p.tool), p.result);
-        task.lines.push({ text: `${p.tool} ${shortArgs(p.arguments)} → ${result}`.trim(), tone, seconds });
+        if (open) Object.assign(open, { text: `${call} → ${result}`, tone, seconds }); // the time shown is when it ended
+        else task.lines.push({ text: `${call} → ${result}`, tone, seconds, callKey });
         break;
       }
       case 'approval_requested':
@@ -108,7 +118,36 @@ export function buildTasks(events: EventEnvelope[]): Map<string, TaskView> {
         break;
     }
   }
+  for (const task of tasks.values()) {
+    // A finished task has no call still running; one that never reported back is shown as unfinished.
+    if (isTerminal(task.state))
+      for (const line of task.lines)
+        if (line.tone === 'run') Object.assign(line, { text: `${line.text} → did not finish`, tone: 'warn' });
+  }
   return tasks;
+}
+
+/** Event positions per task: where it began, and, for a task sent straight to the main agent, where the voice agent
+ *  announced it. */
+export function taskStarts(events: { pos: number; event: EventEnvelope }[]): { first: Map<string, number>; direct: Map<string, number> } {
+  const first = new Map<string, number>();
+  const direct = new Map<string, number>();
+  for (const { pos, event } of events) {
+    if (!event.task_id) continue;
+    if (!first.has(event.task_id)) first.set(event.task_id, pos);
+    if (event.type === 'delegation' && event.source === 'voice' && event.payload.by === 'direct') direct.set(event.task_id, pos);
+  }
+  return { first, direct };
+}
+
+/** Where a task card sits among the messages (`messages` sorted by position). Normally under the reply that announced it
+ *  ("On it…"), else where the task began. A task sent straight to the main agent has no such reply, and the main agent
+ *  announces it before the voice agent publishes your message, so its card goes where the voice agent announced it,
+ *  which is right after your message. */
+export function cardPosition(first: number, direct: number | undefined, messages: { pos: number | null; role: string }[]): number {
+  if (direct !== undefined) return direct;
+  const next = messages.find((m) => (m.pos ?? 0) > first);
+  return next?.role === 'assistant' ? (next.pos ?? 0) + 0.5 : first;
 }
 
 /** The line shown with a pulsing dot while a task is still working. */
@@ -208,7 +247,8 @@ export function buildTrace(events: EventEnvelope[]): TraceStep[] {
 
 export interface AgentStats {
   tokensPerSecond: number | null;
-  contextPercent: number | null;
+  /** Tokens the agent sent in its last call: how much of the window is in use. */
+  contextTokens: number | null;
   contextLength: number | null;
 }
 
@@ -222,10 +262,17 @@ export function agentStats(events: EventEnvelope[], agent: 'main' | 'voice'): Ag
     return {
       tokensPerSecond: p.tokens_per_second ? Math.round(p.tokens_per_second) : null,
       contextLength: length,
-      contextPercent: length && input ? Math.min(100, Math.round((input / length) * 100)) : null,
+      contextTokens: input,
     };
   }
-  return { tokensPerSecond: null, contextPercent: null, contextLength: null };
+  return { tokensPerSecond: null, contextTokens: null, contextLength: null };
+}
+
+/** "4412/16384": tokens in use out of the window, as far as each is known. */
+export function contextText(used: number | null, window: number | null): string {
+  if (used && window) return `${used}/${window}`;
+  if (used) return `${used} tokens`;
+  return window ? `–/${window}` : '';
 }
 
 export function formatContext(length: number | null): string {

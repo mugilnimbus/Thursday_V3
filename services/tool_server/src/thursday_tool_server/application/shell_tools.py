@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from thursday_tool_server.application.files import ToolFailure
+from thursday_tool_server.domain.deny import refusal, refusal_words
 from thursday_tool_server.domain.shell_result import ShellResult
 from thursday_tool_server.domain.workspace import Workspace
 
@@ -63,9 +64,17 @@ class ShellTools:
     async def run(self, command: str, timeout_seconds: float | None = None) -> str:
         if not command.strip():
             raise ToolFailure("command is empty")
+        self._check(command)
         timeout = self._limits.clamp(timeout_seconds)
         result = await self._run(command, self._ws.root, timeout, self._limits.output_limit)
         return describe(result, timeout)
+
+    @staticmethod
+    def _check(command: str) -> None:
+        """The last guard: a command on the deny list does not run, whatever was approved."""
+        reason = refusal(command)
+        if reason is not None:
+            raise ToolFailure(refusal_words(reason))
 
     async def open_session(self) -> str:
         self._sessions = {h: s for h, s in self._sessions.items() if s.alive}
@@ -80,6 +89,7 @@ class ShellTools:
         if session is None or not session.alive:
             self._sessions.pop(handle, None)
             raise ToolFailure(f"unknown or closed session: {handle}; open a new one")
+        self._check(command)
         timeout = self._limits.clamp(timeout_seconds)
         result = await session.run(command, timeout, self._limits.output_limit)
         if result.timed_out:

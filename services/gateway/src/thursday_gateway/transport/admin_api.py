@@ -1,38 +1,55 @@
 """Settings, trace list, and tools endpoints for the dashboard and app (`/v1`).
 
-Agent settings are owned by each agent; the gateway forwards them and never sees or writes
-keys. General settings combine the main agent's behavior with the gateway's own retention.
+Agent settings are owned by each agent; the gateway forwards them. A new API key passes through to
+the agent, which stores it; the gateway never stores, logs, or returns keys. General settings combine
+the main agent's behavior with the gateway's own retention.
 """
 
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
+from thursday_gateway.application.ports import Reply
 from thursday_gateway.application.projects import NotFound
-from thursday_gateway.infrastructure.agents import AgentRefused, AgentUnavailable
-from thursday_gateway.transport.api import Services
-
-AGENTS = ("main", "voice")
-RUNNING_STATES = ("submitted", "working", "input_required")
+from thursday_gateway.application.retention import DATA, OLD_DATA
+from thursday_gateway.transport.services import Services
 
 
 class GeneralPatch(BaseModel):
     compaction_threshold_percent: float | None = Field(default=None, ge=10, le=99)
     keep_awake_paused_minutes: float | None = Field(default=None, ge=0, le=24 * 60)
-    trace_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    data_retention_days: int | None = Field(default=None, ge=0, le=3650)  # 0: until deleted by hand
+    trace_retention_days: int | None = Field(default=None, ge=1, le=3650)  # the older name of the same
     metrics_retention_days: int | None = Field(default=None, ge=1, le=365)
 
 
-def build_admin_router(
-    s: Services, auth: Callable[..., Awaitable[None]], retention_defaults: dict[str, int]
-) -> APIRouter:
+def refusal_words(detail: object) -> str:
+    """Why an agent refused a request, as words for the person who sent it.
+
+    An agent answers a body it cannot accept with a list, one entry for each field that is wrong. Shown as it
+    comes, that is a page of brackets; here each entry becomes "field: what is wrong with it".
+    """
+    if not isinstance(detail, list):
+        return str(detail)
+    parts = []
+    for entry in detail:
+        if not isinstance(entry, dict):
+            parts.append(str(entry))
+            continue
+        field = ".".join(str(step) for step in entry.get("loc", ()) if step != "body")
+        wrong = str(entry.get("msg", "")).strip()
+        parts.append(f"{field}: {wrong}" if field and wrong else field or wrong)
+    return "; ".join(part for part in parts if part)[:500]
+
+
+def build_admin_router(s: Services, auth: Callable[..., Awaitable[None]]) -> APIRouter:
     r = APIRouter(prefix="/v1", dependencies=[Depends(auth)])
 
-    def caller(agent: str) -> Callable[..., Awaitable[httpx.Response]]:
+    def caller(agent: str) -> Callable[..., Awaitable[Reply]]:
         if agent == "main":
             return s.main.management
         if agent == "voice" and s.voice is not None:
@@ -47,7 +64,7 @@ def build_admin_router(
                 if response.headers.get("content-type", "").startswith("application/json")
                 else response.text[:200]
             )
-            raise AgentRefused(response.status_code, str(detail))
+            raise AgentRefused(response.status_code, refusal_words(detail))
         return response.json() if response.content else None
 
     async def body_or_none(request: Request) -> Any:
@@ -62,9 +79,14 @@ def build_admin_router(
     async def put_llm(agent: str, request: Request) -> Any:
         return await forward(agent, "PUT", "/llm", await request.json())
 
-    @r.post("/agents/{agent}/llm/reload-keys")
-    async def reload_keys(agent: str) -> Any:
-        return await forward(agent, "POST", "/llm/reload-keys")
+    @r.put("/agents/{agent}/llm/key")
+    async def put_key(agent: str, request: Request) -> Any:
+        """Passed straight to the agent, which stores it in the credential store. The gateway keeps no copy."""
+        return await forward(agent, "PUT", "/llm/key", await request.json())
+
+    @r.get("/agents/{agent}/models")
+    async def list_models(agent: str) -> Any:
+        return await forward(agent, "GET", "/models")
 
     @r.post("/agents/{agent}/model/{action}")
     async def model_action(agent: str, action: str, request: Request) -> Any:
@@ -82,16 +104,15 @@ def build_admin_router(
     async def prompt_versions(agent: str) -> Any:
         return await forward(agent, "GET", "/prompt/versions")
 
-    def retention() -> dict[str, int]:
-        return {**retention_defaults, **(s.store.get_setting("retention") or {})}
-
     @r.get("/settings/general")
     async def general() -> dict[str, Any]:
         try:
             behavior = await forward("main", "GET", "/behavior")
         except (AgentUnavailable, AgentRefused):
             behavior = None
-        return {**(behavior or {}), **retention(), "main_agent_reachable": behavior is not None}
+        periods = s.retention.current()
+        # The older name is still answered, for a phone app that has not been updated yet.
+        return {**(behavior or {}), **periods, OLD_DATA: periods[DATA], "main_agent_reachable": behavior is not None}
 
     @r.put("/settings/general")
     async def put_general(body: GeneralPatch) -> dict[str, Any]:
@@ -101,8 +122,11 @@ def build_admin_router(
         }
         if behavior_patch:
             await forward("main", "PUT", "/behavior", behavior_patch)
+        if OLD_DATA in patch:
+            patch.setdefault(DATA, patch.pop(OLD_DATA))
         if patch:
-            s.store.set_setting("retention", {**retention(), **patch})
+            s.retention.change(patch)
+            await s.retention.sync()  # the agents hear it now; one that is down hears it when it is back
         return await general()
 
     @r.get("/tasks")
@@ -111,28 +135,14 @@ def build_admin_router(
         q: str | None = Query(None, max_length=200),
         limit: int = Query(100, ge=1, le=500),
     ) -> dict[str, Any]:
-        sql = (
-            "select t.*, c.title as chat_title, p.name as project_name from tasks t "
-            "left join chats c on c.chat_id = t.chat_id left join projects p on p.project_id = t.project_id where 1=1"
-        )
-        params: list[Any] = []
-        if state == "running":
-            sql += " and t.state in ('submitted','working','input_required')"
-        elif state == "failed":
-            sql += " and t.state = 'failed'"
-        if q:
-            sql += " and (t.instruction like ? escape '\\' or t.summary like ? escape '\\')"
-            like = "%" + q.replace("%", r"\%").replace("_", r"\_") + "%"
-            params += [like, like]
-        rows = s.store.query(sql + " order by t.created_at desc limit ?", (*params, limit))
-        return {"tasks": [dict(row) for row in rows]}
+        return {"tasks": s.read.find_tasks(state, q, limit)}
 
     catalog_cache: dict[str, Any] = {}
 
     @r.get("/tools")
     async def tools() -> dict[str, Any]:
-        titles = {row["chat_id"]: row["title"] for row in s.store.query("select chat_id, title from chats")}
-        projects = s.store.projects()
+        titles = s.read.chat_titles()
+        projects = s.read.projects()
         try:
             rules = (await forward("main", "GET", "/allow-rules"))["rules"]
             status = (await forward("main", "GET", "/status"))["tool_servers"]

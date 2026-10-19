@@ -8,15 +8,10 @@ from pydantic import SecretStr
 from thursday_contracts.approvals import APPROVAL_ANSWER_KIND
 from thursday_contracts.task_control import EXTENSIONS_HEADER, TASK_CONTROL_EXTENSION_URI
 
+from thursday_voice_agent.application.errors import MainAgentRefused, MainAgentUnavailable
 
-class MainAgentUnavailable(Exception):
-    pass
-
-
-class MainAgentRefused(Exception):
-    def __init__(self, code: int, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+REQUEST_NAME = "thursday.request"
+"""Metadata of a new task's message: the name of the request. The main agent starts one task per name."""
 
 
 class MainAgentClient:
@@ -43,14 +38,24 @@ class MainAgentClient:
         return body.get("result") or {}
 
     async def start_task(
-        self, chat_id: str, instruction: str, project_id: str, folder: str, push_url: str, push_token: str
+        self,
+        chat_id: str,
+        instruction: str,
+        project_id: str,
+        folder: str,
+        push_url: str,
+        push_token: str,
+        request: str | None = None,
     ) -> dict[str, Any]:
+        metadata = {"thursday.project_id": project_id, "thursday.project_folder": folder}
+        if request is not None:
+            metadata[REQUEST_NAME] = request
         message = {
-            "messageId": str(uuid.uuid4()),
+            "messageId": request or str(uuid.uuid4()),
             "role": "ROLE_USER",
             "contextId": chat_id,
             "parts": [{"text": instruction}],
-            "metadata": {"thursday.project_id": project_id, "thursday.project_folder": folder},
+            "metadata": metadata,
         }
         result = await self._rpc(
             "SendMessage",

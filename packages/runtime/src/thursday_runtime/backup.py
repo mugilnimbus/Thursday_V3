@@ -1,7 +1,8 @@
 """Per-service backup of its own SQLite files, requested by the gateway.
 
 Uses SQLite's online backup API, so the copy is consistent while the service keeps running.
-Secrets never live in these files (keys stay in `.env`, which is never backed up).
+Secrets never live in these files: API keys stay in the credential store and the service token in `.env`,
+and neither is backed up.
 """
 
 import os

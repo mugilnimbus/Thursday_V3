@@ -1,9 +1,9 @@
 <script lang="ts">
   import { api } from '../../lib/api/gateway';
-  import type { Agent, LlmSettings } from '../../lib/api/types';
+  import type { Agent, LlmSettings, ModelEntry } from '../../lib/api/types';
   import { app, errorText } from '../../lib/state/app.svelte';
   import AgentCard from './AgentCard.svelte';
-  import { changes, toForm, validate, type AgentForm } from './agentForm';
+  import { changes, listingChanged, onlyChoice, toForm, validate, type AgentForm } from './agentForm';
   import type { SaveBar } from './savebar.svelte';
 
   let { bar }: { bar: SaveBar } = $props();
@@ -19,8 +19,8 @@
   let failed = $state<Record<Agent, string>>({ main: '', voice: '' });
   let errors = $state<Record<Agent, string>>({ main: '', voice: '' });
   let busy = $state<Record<Agent, string>>({ main: '', voice: '' });
-  let threshold = $state<number | null>(null);
-  let thresholdSaved = $state<number | null>(null);
+  let models = $state<Record<Agent, ModelEntry[]>>({ main: [], voice: [] });
+  let modelsError = $state<Record<Agent, string>>({ main: '', voice: '' });
 
   function take(agent: Agent, s: LlmSettings) {
     settings[agent] = s;
@@ -28,10 +28,28 @@
     form[agent] = toForm(s);
   }
 
+  /** The models the saved provider settings offer. Listing never loads anything. */
+  async function listModels(agent: Agent) {
+    try {
+      const r = await api.models(agent);
+      models[agent] = r.models;
+      modelsError[agent] = r.error ?? '';
+      // With one model to choose from and nothing valid chosen, choose it: it shows as an unsaved change.
+      const f = form[agent];
+      const o = original[agent];
+      const only = f && o && !listingChanged(o, f) ? onlyChoice(f, r.models) : null;
+      if (f && only) f.model = only;
+    } catch (e) {
+      models[agent] = [];
+      modelsError[agent] = errorText(e);
+    }
+  }
+
   async function load(agent: Agent) {
     try {
       take(agent, await api.llm(agent));
       failed[agent] = '';
+      void listModels(agent);
     } catch (e) {
       failed[agent] = errorText(e);
     }
@@ -40,10 +58,6 @@
   $effect(() => {
     void load('main');
     void load('voice');
-    api.general().then(
-      (g) => (threshold = thresholdSaved = g.compaction_threshold_percent ?? null),
-      () => undefined,
-    );
     return bar.attach({ save, discard });
   });
 
@@ -53,16 +67,17 @@
   });
 
   $effect(() => {
-    bar.dirty = Object.keys(diff.main).length > 0 || Object.keys(diff.voice).length > 0 || threshold !== thresholdSaved;
+    bar.dirty = Object.keys(diff.main).length > 0 || Object.keys(diff.voice).length > 0;
   });
 
   async function saveAgent(agent: Agent): Promise<void> {
     const f = form[agent];
     if (!f || !Object.keys(diff[agent]).length) return;
-    const problem = validate(f);
+    const problem = validate(f, original[agent] ?? undefined);
     errors[agent] = problem;
     if (problem) throw new Error(problem);
     take(agent, await api.updateLlm(agent, diff[agent]));
+    void listModels(agent);
   }
 
   async function save() {
@@ -74,16 +89,11 @@
         throw new Error(`${agent === 'main' ? 'Main' : 'Voice'} agent: ${errors[agent]}`);
       }
     }
-    if (threshold !== thresholdSaved && threshold !== null) {
-      const g = await api.saveGeneral({ compaction_threshold_percent: threshold });
-      threshold = thresholdSaved = g.compaction_threshold_percent ?? threshold;
-    }
     app.toast('Settings saved.', 'ok');
   }
 
   function discard() {
     for (const { agent } of AGENTS) if (original[agent]) form[agent] = { ...original[agent]! };
-    threshold = thresholdSaved;
     errors = { main: '', voice: '' };
   }
 
@@ -96,12 +106,21 @@
       settings[agent] = next;
       // Keep unrelated unsaved edits; refresh the saved baseline.
       original[agent] = toForm(next);
+      void listModels(agent);
       if (!unsaved || !Object.keys(diff[agent]).length) form[agent] = toForm(next);
     } catch (e) {
       errors[agent] = errorText(e);
     } finally {
       busy[agent] = '';
     }
+  }
+
+  /** Keys go straight to the credential store, apart from the save bar: a secret never waits in the form. */
+  async function saveKey(agent: Agent, key: string): Promise<boolean> {
+    await run(agent, 'key', () => api.setKey(agent, key));
+    if (errors[agent]) return false;
+    app.toast(key ? 'Key saved.' : 'Key removed.', 'ok');
+    return true;
   }
 
   const reload = (agent: Agent) =>
@@ -122,10 +141,15 @@
         form={form[agent]!}
         error={errors[agent]}
         busy={busy[agent]}
+        models={models[agent]}
+        modelsError={modelsError[agent]}
+        listingStale={!!original[agent] && listingChanged(original[agent]!, form[agent]!)}
+        providerUnsaved={original[agent]?.provider !== form[agent]!.provider}
+        onrefreshmodels={() => listModels(agent)}
         onreload={() => reload(agent)}
         onunload={() => run(agent, 'unload', async () => (await api.model(agent, 'unload'), api.llm(agent)))}
         onload={() => run(agent, 'load', async () => (await api.model(agent, 'load'), api.llm(agent)))}
-        onreloadkeys={() => run(agent, 'keys', () => api.reloadKeys(agent))}
+        onsavekey={(key) => saveKey(agent, key)}
       />
     {:else}
       <div class="card agent-card">
@@ -139,15 +163,4 @@
       </div>
     {/if}
   {/each}
-</div>
-<div class="card form">
-  <div class="between"><h2>Context</h2><span class="caption">Main agent</span></div>
-  {#if threshold !== null}
-    <div class="field">
-      <label for="compact">Summarise older turns when the context is <b>{threshold}%</b> full</label>
-      <input id="compact" type="range" min="50" max="98" bind:value={threshold} />
-    </div>
-  {:else}
-    <p class="caption" style="margin:0">Available when the main agent is running.</p>
-  {/if}
 </div>

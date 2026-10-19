@@ -11,12 +11,12 @@ from pydantic_settings import SettingsConfigDict
 from thursday_contracts.health import ServiceName
 from thursday_runtime.health import build_health_router
 from thursday_runtime.log_setup import configure_logging
-from thursday_runtime.paths import log_dir
+from thursday_runtime.paths import data_root, log_dir
 from thursday_runtime.serve import LOCALHOST, serve
 from thursday_runtime.settings import CommonSettings, env_file
 
 from thursday_metrics_collector import __version__
-from thursday_metrics_collector.application.collector import Collector, Host, Target
+from thursday_metrics_collector.application.collector import Collector, Host, Storage, Target
 
 SERVICE = ServiceName.METRICS_COLLECTOR
 
@@ -29,8 +29,14 @@ class CollectorSettings(CommonSettings):
     metrics_sample_interval_seconds: float = Field(default=1, ge=1, le=300)
 
 
-def create_app(settings: CollectorSettings | None = None, host: Host | None = None) -> FastAPI:
+def create_app(
+    settings: CollectorSettings | None = None, host: Host | None = None, storage: Storage | None = None
+) -> FastAPI:
     settings = settings or CollectorSettings()
+    if storage is None:
+        from thursday_metrics_collector.infrastructure.disk import DataFolders
+
+        storage = DataFolders(data_root(settings.thursday_data_dir))
     if host is None:
         from thursday_metrics_collector.infrastructure.host import HostReader
 
@@ -46,6 +52,7 @@ def create_app(settings: CollectorSettings | None = None, host: Host | None = No
         targets,
         f"http://{LOCALHOST}:{settings.gateway_localhost_port}",
         settings.thursday_service_token.get_secret_value(),
+        storage=storage,
     )
 
     @contextlib.asynccontextmanager

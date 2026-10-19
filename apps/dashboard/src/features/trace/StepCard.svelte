@@ -1,13 +1,16 @@
 <!-- One model step: timing, the model's words, its tool calls with approvals and results, and the
-     captured request and response bodies. -->
+     captured request and response. Each is shown as labelled parts (who said what, thinking, answer, tool
+     calls); "Raw" shows the body exactly as stored. -->
 <script lang="ts">
   import type { TraceStep } from '../../lib/state/timeline';
   import Icon from '../../lib/ui/Icon.svelte';
   import Markdown from '../../lib/ui/Markdown.svelte';
+  import { rawText, requestParts, responseParts } from './traceBody';
 
   let { step, open = false, final = false }: { step: TraceStep; open?: boolean; final?: boolean } = $props();
 
   let body = $state<'request' | 'response'>('request');
+  let raw = $state(false);
   let copied = $state(false);
 
   const llm = $derived(step.llm ?? {});
@@ -23,18 +26,11 @@
     if (llm.status && llm.status !== 'ok') parts.push(llm.status);
     return parts.join(' · ');
   });
-  const shown = $derived(pretty(body === 'request' ? llm.request_body : llm.response_body));
-
-  function pretty(value: unknown): string {
-    if (value == null) return 'Not captured.';
-    if (typeof value === 'object') return JSON.stringify(value, null, 2);
-    const text = String(value);
-    try {
-      return JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      return text;
-    }
-  }
+  const stored = $derived(body === 'request' ? llm.request_body : llm.response_body);
+  const parts = $derived(stored == null ? null : body === 'request' ? requestParts(stored) : responseParts(stored));
+  const shown = $derived(rawText(stored));
+  /** What Copy takes: the readable parts as text, or the raw body when that is what is on screen. */
+  const copyText = $derived(parts && !raw ? parts.map((part) => `${part.label}\n${part.text}`).join('\n\n') : shown);
 
   function chip(status: string) {
     if (status === 'ok') return 'var(--success)';
@@ -55,7 +51,7 @@
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(shown);
+      await navigator.clipboard.writeText(copyText);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
@@ -96,9 +92,31 @@
         <button aria-pressed={body === 'response'} onclick={() => (body = 'response')}>Response</button>
       </div>
       <span class="spacer"></span>
+      {#if parts}<button class="btn plain" style="min-height:32px" aria-pressed={raw} onclick={() => (raw = !raw)}>{raw ? 'Readable' : 'Raw'}</button>{/if}
       <button class="btn plain" style="min-height:32px" onclick={copy}><Icon name="copy" />{copied ? 'Copied' : 'Copy'}</button>
     </div>
-    <pre class="code">{shown}</pre>
-    <span class="caption">Headers are never stored. Bodies over 200 kB are cut and marked.{llm.body_truncated ? ' This one was cut.' : ''}</span>
+    {#if parts && !raw}
+      <div class="parts">
+        {#each parts as part, i (i)}
+          <section class="part">
+            <h4>{part.label}</h4>
+            {#if part.code}<pre class="code wrap">{part.text}</pre>{:else}<p>{part.text}</p>{/if}
+          </section>
+        {:else}
+          <p class="caption" style="margin:0">Nothing in this {body}.</p>
+        {/each}
+      </div>
+    {:else}
+      <pre class="code">{shown}</pre>
+    {/if}
+    <span class="caption">Headers are never stored. Very long texts are cut and marked.{llm.body_truncated ? ' This one was cut.' : ''}</span>
   </div>
 </details>
+
+<style>
+  .parts { display: grid; gap: var(--space-3); max-height: 70vh; overflow-y: auto; }
+  .part { display: grid; gap: var(--space-1); min-width: 0; }
+  .part h4 { margin: 0; font-size: var(--text-caption); font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .part p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+  .part .code { margin: 0; max-height: 320px; }
+</style>

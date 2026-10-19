@@ -1,24 +1,32 @@
-"""HTTP surface: chat turns (NDJSON stream, from the gateway), the A2A push webhook (from the main
-agent), and management (replay, prompts). All but the webhook need the service token; the
-webhook checks the per-task push token instead."""
+"""HTTP surface: chat turns (NDJSON stream, from the gateway), hearing a recording with the voice model,
+the A2A push webhook (from the main agent), and management (replay, prompts). All but the webhook need the
+service token; the webhook checks the per-task push token instead."""
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from thursday_contracts.retention import RETENTION_PATH, RetentionSetting
+from thursday_llm import management
+from thursday_llm.overrides import KeyChange, LlmOverrides, LoadOverrides
 from thursday_llm.providers import ProviderError
-from thursday_llm.runtime import LlmOverrides, LlmRuntime, LoadOverrides
+from thursday_llm.runtime import LlmRuntime, ModelBusy
 from thursday_runtime.auth import ServiceTokenAuth
-from thursday_runtime.outbox import OutboxStore
+from thursday_runtime.secret_store import SecretStoreError
 
-from thursday_voice_agent.application.conversation import Conversation, Project, VoiceModelUnavailable
+from thursday_voice_agent.application.conversation import Conversation, Project
+from thursday_voice_agent.application.errors import ChatDeleted, MainAgentRefused, MainAgentUnavailable
+from thursday_voice_agent.application.model_stream import VoiceModelUnavailable
+from thursday_voice_agent.application.ports import ManagementRecords, Outbox
 from thursday_voice_agent.application.prompts import DEFAULT_SYSTEM_PROMPT
+from thursday_voice_agent.application.retention import WorkingData
 from thursday_voice_agent.application.tasks import TaskRelay
-from thursday_voice_agent.infrastructure.store import Store
+from thursday_voice_agent.domain.audio import MAX_HEAR_SECONDS, plausible, wav_seconds
 
 log = logging.getLogger(__name__)
 
@@ -34,13 +42,17 @@ class PromptIn(BaseModel):
     text: str = Field(min_length=1, max_length=50_000)
 
 
+CHAT_DELETED = "this chat was deleted"
+
+
 def build_router(
     conversation: Conversation,
     relay: TaskRelay,
-    store: Store,
-    outbox: OutboxStore,
+    store: ManagementRecords,
+    outbox: Outbox,
     auth: ServiceTokenAuth,
     llm: LlmRuntime,
+    retention: WorkingData,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1")
     guarded = [Depends(auth)]
@@ -52,6 +64,8 @@ def build_router(
         )
         try:
             first = await anext(stream)
+        except ChatDeleted as exc:
+            raise HTTPException(410, CHAT_DELETED) from exc
         except VoiceModelUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
 
@@ -65,6 +79,53 @@ def build_router(
                 yield (json.dumps({"type": "error", "message": type(exc).__name__}) + "\n").encode()
 
         return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+    @router.post("/hear", dependencies=guarded)
+    async def hear(request: Request) -> dict[str, Any]:
+        """Body: a WAV clip. The voice model itself writes down what is said.
+
+        409 means "use speech-to-text instead": the model cannot hear, the clip is too long, or nothing was heard.
+        """
+        wav = await request.body()
+        length = wav_seconds(wav)
+        if length is None:
+            raise HTTPException(422, "the recording must be a WAV clip")
+        if length > MAX_HEAR_SECONDS:
+            raise HTTPException(409, "the recording is too long for the model to hear")
+        started = time.perf_counter()
+        try:
+            text = await llm.hear(wav)
+        except ProviderError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if text is None:
+            raise HTTPException(409, "the voice model cannot hear")
+        if not text:
+            raise HTTPException(409, "the voice model heard nothing")
+        if not plausible(text, length):
+            log.warning(
+                "the voice model wrote %d words for a %.1f s clip; using speech-to-text", len(text.split()), length
+            )
+            raise HTTPException(409, "the voice model's words do not fit the recording")
+        return {
+            "text": text,
+            "audio_seconds": round(length, 2),
+            "seconds": round(time.perf_counter() - started, 3),
+            "by": "voice_model",
+        }
+
+    @router.post("/chats/{chat_id}/direct", dependencies=guarded)
+    async def direct(chat_id: str, body: TurnIn) -> dict[str, Any]:
+        """Start a task from the user's words, unchanged, without the voice model. 503 means "try again later"."""
+        try:
+            return await conversation.direct(
+                chat_id, body.client_message_id, body.text, Project(body.project_id, body.project_folder)
+            )
+        except ChatDeleted as exc:
+            raise HTTPException(410, CHAT_DELETED) from exc
+        except MainAgentUnavailable as exc:
+            raise HTTPException(503, "the main agent is not reachable") from exc
+        except MainAgentRefused as exc:
+            raise HTTPException(409, f"the main agent refused the task: {exc}") from exc
 
     @router.delete("/chats/{chat_id}", status_code=204, dependencies=guarded)
     async def delete_chat(chat_id: str) -> None:
@@ -80,10 +141,9 @@ def build_router(
             return {"ignored": True}
         if not relay.push_token_ok(task["id"], request.headers.get("X-A2A-Notification-Token")):
             raise HTTPException(401, "bad push token")
-        record = store.task(task["id"])
         spoken = relay.apply(task)
-        if spoken and record is not None:
-            relay.say(record.chat_id, spoken)
+        if spoken:
+            relay.announce(task["id"], spoken)
         return {"spoken": bool(spoken)}
 
     @router.get("/replay", dependencies=guarded)
@@ -104,33 +164,50 @@ def build_router(
         versions = [{"version": v, "created_at": c, "text": t} for v, c, t in store.prompt_versions()]
         return {"versions": versions, "default": DEFAULT_SYSTEM_PROMPT}
 
+    @router.get(RETENTION_PATH, dependencies=guarded)
+    async def get_retention() -> RetentionSetting:
+        return RetentionSetting(days=retention.days)
+
+    @router.put(RETENTION_PATH, dependencies=guarded)
+    async def put_retention(body: RetentionSetting) -> RetentionSetting:
+        """The gateway sends the period chosen in Settings. Repeating it changes nothing."""
+        return RetentionSetting(days=retention.apply(body.days))
+
     @router.get("/llm", dependencies=guarded)
     async def llm_settings() -> dict[str, Any]:
-        return {**llm.describe(), "reachable": await llm.provider.reachable()}
+        return await management.settings(llm)
 
     @router.put("/llm", dependencies=guarded)
     async def update_llm(body: LlmOverrides) -> dict[str, Any]:
-        await llm.update(body)
+        try:
+            await llm.update(body)
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
         return llm.describe()
 
-    @router.post("/llm/reload-keys", dependencies=guarded)
-    async def reload_keys() -> dict[str, Any]:
-        await llm.reload_keys()
+    @router.put("/llm/key", dependencies=guarded)
+    async def set_key(body: KeyChange) -> dict[str, Any]:
+        try:
+            await llm.set_key(body.key.get_secret_value().strip())
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except SecretStoreError as exc:
+            raise HTTPException(503, str(exc)) from exc
         return llm.describe()
+
+    @router.get("/models", dependencies=guarded)
+    async def available_models() -> dict[str, Any]:
+        return await management.available_models(llm)
 
     @router.post("/model/{action}", dependencies=guarded)
     async def model_action(action: str, body: LoadOverrides | None = None) -> dict[str, Any]:
         try:
-            if action == "load":
-                await llm.provider.ensure_loaded()
-            elif action == "reload":
-                await llm.reload_model(body)
-            elif action == "unload":
-                await llm.provider.unload()
-            else:
-                raise HTTPException(404, "unknown action")
+            return await management.model_action(llm, action, body)
+        except management.UnknownAction as exc:
+            raise HTTPException(404, "unknown action") from exc
+        except ModelBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
         except ProviderError as exc:
             raise HTTPException(503, str(exc)) from exc
-        return llm.describe()
 
     return router

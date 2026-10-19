@@ -11,7 +11,7 @@ interface Positioned {
   event: EventEnvelope;
 }
 import type { StreamClient } from '../live/stream';
-import { buildTasks, type TaskView } from './timeline';
+import { buildTasks, cardPosition, taskStarts, type TaskView } from './timeline';
 
 export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -21,6 +21,8 @@ export interface Outgoing {
   /** sending: posting to the gateway; unsent: the gateway could not be reached (retry keeps the same id). */
   status: 'sending' | 'queued' | 'delivered' | 'failed' | 'unsent';
   error: string;
+  /** Sent straight to the main agent: no voice reply streams back, so the voice agent is not shown as thinking. */
+  direct: boolean;
 }
 
 export type ThreadItem =
@@ -43,8 +45,11 @@ export class ChatSession {
   tasks = $derived(buildTasks(this.events.map((e) => e.event)));
   items = $derived(this.buildItems());
 
-  /** Called for each new reply from the voice agent as it arrives (used to read it aloud). */
-  onReply: ((text: string) => void) | null = null;
+  /** Called for each new reply from the voice agent once it is complete (used to read it aloud). `replyId`
+      is set when the reply answered a message of this chat, and is the id its parts came with. */
+  onReply: ((text: string, replyId: string | null) => void) | null = null;
+  /** Called with each part of a reply while it is still being written. */
+  onReplyPart: ((replyId: string, part: string) => void) | null = null;
 
   private seenPos = new Set<number>();
   private lastEventPos = 0;
@@ -69,14 +74,21 @@ export class ChatSession {
     this.loading = true;
     this.error = null;
     try {
-      const [history, events] = await Promise.all([api.messages(this.chatId), this.loadEvents()]);
+      const [history, loaded] = await Promise.all([api.messages(this.chatId), this.loadEvents()]);
+      const events = loaded.events;
+      this.lastEventPos = loaded.last; // only now: a load that failed half-way starts again from where it began
       this.messages = history.messages;
       history.messages.forEach((m) => m.pos !== null && this.seenPos.add(m.pos));
       this.hasEarlier = history.messages.length >= 50;
       this.outgoing = history.pending
         .filter((p) => p.status !== 'delivered')
-        .map((p) => ({ clientMessageId: p.client_message_id, text: p.text, status: p.status, error: p.error }));
-      this.events = events;
+        .map((p) => ({ clientMessageId: p.client_message_id, text: p.text, status: p.status, error: p.error, direct: p.direct ?? false }));
+      this.events = [...this.events, ...events];
+      // The two lists were read a moment apart: a message stored in between is in the events only.
+      const newest = Math.max(-1, ...history.messages.map((m) => m.pos ?? -1));
+      if (newest >= 0 || !history.messages.length)
+        for (const { pos, event } of events)
+          if (pos > newest && (event.type === 'user_message' || event.type === 'assistant_message')) this.addMessage(pos, event);
       const buffered = this.buffered ?? [];
       this.buffered = null;
       buffered.forEach((m) => this.onStream(m));
@@ -87,15 +99,17 @@ export class ChatSession {
     }
   }
 
-  private async loadEvents(): Promise<Positioned[]> {
+  /** Everything after the last position kept, page by page, and the position it reaches. */
+  private async loadEvents(): Promise<{ events: Positioned[]; last: number }> {
     const all: Positioned[] = [];
+    let last = this.lastEventPos;
     for (;;) {
-      const { events } = await api.timeline(this.chatId, this.lastEventPos);
+      const { events } = await api.timeline(this.chatId, last);
       for (const m of events) {
         all.push({ pos: m.pos, event: m.event });
-        this.lastEventPos = Math.max(this.lastEventPos, m.pos);
+        last = Math.max(last, m.pos);
       }
-      if (events.length < PAGE) return all;
+      if (events.length < PAGE) return { events: all, last };
     }
   }
 
@@ -111,7 +125,7 @@ export class ChatSession {
   /* ---------- sending ---------- */
 
   async send(text: string): Promise<void> {
-    const entry: Outgoing = { clientMessageId: crypto.randomUUID(), text, status: 'sending', error: '' };
+    const entry: Outgoing = { clientMessageId: crypto.randomUUID(), text, status: 'sending', error: '', direct: false };
     this.outgoing = [...this.outgoing, entry];
     await this.post(entry.clientMessageId);
   }
@@ -132,8 +146,9 @@ export class ChatSession {
     entry.error = '';
     try {
       const result = await api.send(this.chatId, clientMessageId, entry.text);
+      entry.direct = result.direct ?? false;
       if (entry.status === 'sending') entry.status = result.status as Outgoing['status'];
-      if (entry.status !== 'failed') this.setVoice('thinking');
+      if (entry.status !== 'failed' && !entry.direct) this.setVoice('thinking');
     } catch (error) {
       entry.status = error instanceof ApiError && !error.offline && error.status < 500 ? 'failed' : 'unsent';
       entry.error = error instanceof ApiError ? error.message : 'Could not send.';
@@ -147,6 +162,7 @@ export class ChatSession {
       if (message.chat_id !== this.chatId) return;
       if (message.kind === 'chat_delta') {
         this.replies[message.client_message_id] = (this.replies[message.client_message_id] ?? '') + message.text;
+        this.onReplyPart?.(message.client_message_id, message.text);
         this.setVoice('speaking');
         this.settleSoon();
       } else {
@@ -167,7 +183,10 @@ export class ChatSession {
     if (!entry) {
       // Sent from another device: show it until the stored message arrives.
       if (message.status === 'queued' && message.text)
-        this.outgoing = [...this.outgoing, { clientMessageId: message.client_message_id, text: message.text, status: 'queued', error: '' }];
+        this.outgoing = [
+          ...this.outgoing,
+          { clientMessageId: message.client_message_id, text: message.text, status: 'queued', error: '', direct: message.direct ?? false },
+        ];
       return;
     }
     entry.status = message.status as Outgoing['status'];
@@ -190,9 +209,10 @@ export class ChatSession {
       text: String(event.payload.text ?? ''),
       created_at: event.ts,
       client_message_id: clientId,
+      direct: event.type === 'user_message' && event.payload.direct === true,
     };
     this.messages = [...this.messages, message];
-    if (message.role === 'assistant' && Date.now() - Date.parse(event.ts) < 60_000) this.onReply?.(message.text);
+    if (message.role === 'assistant' && Date.now() - Date.parse(event.ts) < 60_000) this.onReply?.(message.text, clientId);
     if (!clientId) return;
     if (message.role === 'user') this.outgoing = this.outgoing.filter((o) => o.clientMessageId !== clientId);
     else {
@@ -221,13 +241,9 @@ export class ChatSession {
   private buildItems(): ThreadItem[] {
     const items: ThreadItem[] = this.messages.map((m) => ({ kind: 'message', key: `m${m.id}`, pos: m.pos ?? 0, message: m }));
     const byPos = [...this.messages].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
-    const start = new Map<string, number>();
-    for (const { pos, event } of this.events) if (event.task_id && !start.has(event.task_id)) start.set(event.task_id, pos);
+    const { first, direct } = taskStarts(this.events);
     for (const task of this.tasks.values()) {
-      // A task card sits under the reply that announced it ("On it…"), else where the task began.
-      const first = start.get(task.taskId) ?? Infinity;
-      const next = byPos.find((m) => (m.pos ?? 0) > first);
-      const pos = next?.role === 'assistant' ? (next.pos ?? 0) + 0.5 : first;
+      const pos = cardPosition(first.get(task.taskId) ?? Infinity, direct.get(task.taskId), byPos);
       items.push({ kind: 'task', key: `t${task.taskId}`, pos, task });
     }
     return items.sort((a, b) => a.pos - b.pos);

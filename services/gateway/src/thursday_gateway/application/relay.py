@@ -7,28 +7,29 @@ from the voice agent's own `user_message` / `assistant_message` events.
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
+from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
 from thursday_gateway.application.hub import Hub
-from thursday_gateway.application.projects import ProjectService
+from thursday_gateway.application.ports import RelayRecords, VoiceAgent
 from thursday_gateway.application.waiting import wait_any
-from thursday_gateway.domain.model import OutgoingStatus
-from thursday_gateway.infrastructure.agents import AgentRefused, AgentUnavailable, VoiceAgentClient
-from thursday_gateway.infrastructure.store import Store
+from thursday_gateway.domain.model import CHAT_DELETED, Outgoing, OutgoingStatus, RecordState
 
 log = logging.getLogger(__name__)
 
 
 class MessageRelay:
-    def __init__(self, store: Store, projects: ProjectService, voice: VoiceAgentClient, hub: Hub) -> None:
+    def __init__(self, store: RelayRecords, voice: VoiceAgent, hub: Hub) -> None:
         self._store = store
-        self._projects = projects
         self._voice = voice
         self._hub = hub
         self.wakeup = asyncio.Event()
         self.voice_reachable = True
 
-    def accept(self, chat_id: str, client_message_id: str, text: str) -> tuple[OutgoingStatus, bool]:
-        record, new = self._store.enqueue(chat_id, client_message_id, text)
+    def accept(
+        self, chat_id: str, client_message_id: str, text: str, direct: bool = False
+    ) -> tuple[OutgoingStatus, bool]:
+        record, new = self._store.enqueue(chat_id, client_message_id, text, direct)
         if new:
             self._hub.publish(
                 {
@@ -37,6 +38,7 @@ class MessageRelay:
                     "client_message_id": client_message_id,
                     "status": record.status.value,
                     "text": text,
+                    "direct": direct,
                 }
             )
             self.wakeup.set()
@@ -52,6 +54,9 @@ class MessageRelay:
         if chat is None or project is None:
             self._store.set_outgoing(out.id, OutgoingStatus.FAILED, "chat no longer exists")
             return True
+        if chat.state is not RecordState.ACTIVE:  # being deleted: nothing more is sent into it
+            self._store.set_outgoing(out.id, OutgoingStatus.FAILED, CHAT_DELETED)
+            return True
         body = {
             "client_message_id": out.client_message_id,
             "text": out.text,
@@ -59,18 +64,10 @@ class MessageRelay:
             "project_folder": project.folder,
         }
         try:
-            async for part in self._voice.turn(out.chat_id, body):
-                if part.get("type") == "delta":
-                    self._hub.publish(
-                        {
-                            "kind": "chat_delta",
-                            "chat_id": out.chat_id,
-                            "client_message_id": out.client_message_id,
-                            "text": part.get("text", ""),
-                        }
-                    )
-                elif part.get("type") == "error":
-                    raise AgentRefused(500, str(part.get("message", "voice agent error")))
+            if out.direct:  # the user's words go straight to the main agent; no reply streams back
+                await self._voice.direct(out.chat_id, body)
+            else:
+                await self._stream_turn(out, body)
         except AgentUnavailable as exc:
             self._store.set_outgoing(out.id, OutgoingStatus.QUEUED, str(exc), attempt=True)
             raise
@@ -96,6 +93,20 @@ class MessageRelay:
             }
         )
         return True
+
+    async def _stream_turn(self, out: Outgoing, body: dict[str, Any]) -> None:
+        async for part in self._voice.turn(out.chat_id, body):
+            if part.get("type") == "delta":
+                self._hub.publish(
+                    {
+                        "kind": "chat_delta",
+                        "chat_id": out.chat_id,
+                        "client_message_id": out.client_message_id,
+                        "text": part.get("text", ""),
+                    }
+                )
+            elif part.get("type") == "error":
+                raise AgentRefused(500, str(part.get("message", "voice agent error")))
 
     async def run(self, stop: asyncio.Event) -> None:
         delay = 1.0

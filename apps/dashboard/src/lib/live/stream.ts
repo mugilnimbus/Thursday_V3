@@ -74,6 +74,8 @@ export class StreamClient {
   stop(): void {
     this.stopped = true;
     this.opts.clearTimer(this.retryTimer);
+    this.opts.clearTimer(this.hiddenTimer);
+    this.hiddenTimer = null;
     this.socket?.close();
     this.socket = null;
     this.setState('offline');
@@ -82,11 +84,15 @@ export class StreamClient {
   /** Call from a visibilitychange listener. */
   visibility(hidden: boolean): void {
     this.opts.clearTimer(this.hiddenTimer);
+    this.hiddenTimer = null;
     if (hidden) {
-      this.hiddenTimer = this.opts.setTimer(() => {
+      const timer: unknown = this.opts.setTimer(() => {
+        if (this.hiddenTimer !== timer) return; // set before a stop or a return to the page: no longer wanted
+        this.hiddenTimer = null;
         this.socket?.close();
         this.socket = null;
       }, this.opts.hiddenCloseMs);
+      this.hiddenTimer = timer;
     } else if (!this.stopped && !this.socket) {
       this.attempt = 0;
       this.connect();

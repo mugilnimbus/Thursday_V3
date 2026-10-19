@@ -14,21 +14,75 @@ sealed interface MdSpan {
     data class Link(val text: String, val href: String) : MdSpan
 }
 
+enum class MdAlign { LEFT, CENTER, RIGHT }
+
 sealed interface MdBlock {
     data class Heading(val level: Int, val spans: List<MdSpan>) : MdBlock
     data class Paragraph(val spans: List<MdSpan>) : MdBlock
-    data class Bullets(val ordered: Boolean, val items: List<List<MdSpan>>) : MdBlock
+    /** `start` is the number a numbered list begins at: one that carries on after something else keeps its numbers. */
+    data class Bullets(val ordered: Boolean, val items: List<List<MdSpan>>, val start: Int = 1) : MdBlock
     data class CodeBlock(val text: String) : MdBlock
+    data class Table(val align: List<MdAlign>, val head: List<List<MdSpan>>, val rows: List<List<List<MdSpan>>>) : MdBlock
     data object Rule : MdBlock
 }
 
 private val INLINE = Regex("""(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(__[^_\n]+?__)|(\*[^*\s][^*\n]*?\*)|(\[[^\]\n]+]\([^)\s]+\))""")
 private val BULLET = Regex("""^\s*[-*+•]\s+(.*)$""")
-private val NUMBER = Regex("""^\s*\d+[.)]\s+(.*)$""")
+private val NUMBER = Regex("""^\s*(\d+)[.)]\s+(.*)$""")
 private val HEADING = Regex("""^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$""")
 private val FENCE = Regex("""^\s*```""")
 private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
 private val WEB = Regex("^https?://", RegexOption.IGNORE_CASE)
+private val DIVIDER_CELL = Regex("^:?-+:?$")
+
+/**
+ * Column widths for a table that should fit in `available`. `natural` is what each column would like (its widest
+ * cell on one line) and `floors` the least it can take without breaking a word. When the table is too wide, each
+ * column gives up width in proportion to what it can spare; a table whose floors alone are too wide stays wider
+ * than `available`, and the caller lets it scroll.
+ */
+fun fitColumns(natural: IntArray, floors: IntArray, available: Int): IntArray {
+    val over = natural.sum() - available
+    val spare = natural.indices.sumOf { natural[it] - floors[it] }
+    if (over <= 0 || spare <= 0) return natural
+    val share = minOf(over, spare).toDouble() / spare
+    return IntArray(natural.size) { natural[it] - kotlin.math.ceil((natural[it] - floors[it]) * share).toInt() }
+}
+
+/** The cells of one table row. A pipe inside `code` or written as \| belongs to its cell. */
+fun mdTableCells(line: String): List<String> {
+    val cells = mutableListOf<String>()
+    val cell = StringBuilder()
+    var code = false
+    val text = line.trim()
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '\\' && i + 1 < text.length && text[i + 1] == '|') {
+            cell.append('|')
+            i++
+        } else if (c == '|' && !code) {
+            cells += cell.toString().trim()
+            cell.clear()
+        } else {
+            if (c == '`') code = !code
+            cell.append(c)
+        }
+        i++
+    }
+    cells += cell.toString().trim()
+    if (text.startsWith("|")) cells.removeAt(0)
+    if (text.endsWith("|") && !text.endsWith("\\|") && cells.isNotEmpty()) cells.removeAt(cells.lastIndex)
+    return cells
+}
+
+/** How each column is aligned, when the line is the row of dashes under a table's heading; otherwise null. */
+private fun tableDivider(line: String): List<MdAlign>? {
+    if ('|' !in line && ':' !in line) return null // a bare "---" is a rule, not a one-column table
+    val cells = mdTableCells(line)
+    if (cells.isEmpty() || !cells.all(DIVIDER_CELL::matches)) return null
+    return cells.map { if (it.endsWith(":")) (if (it.startsWith(":")) MdAlign.CENTER else MdAlign.RIGHT) else MdAlign.LEFT }
+}
 
 fun mdInline(text: String): List<MdSpan> {
     val spans = mutableListOf<MdSpan>()
@@ -81,6 +135,21 @@ fun mdParse(markdown: String): List<MdBlock> {
             flush()
             continue
         }
+        // A table: a row of cells, then a row of dashes with as many cells, then the rows until one has no pipe.
+        // (`i` already points at the line after this one.)
+        val align = if ('|' in line && i < lines.size) tableDivider(lines[i]) else null
+        val head = if (align != null) mdTableCells(line) else emptyList()
+        if (align != null && head.size == align.size) {
+            flush()
+            val rows = mutableListOf<List<List<MdSpan>>>()
+            i++
+            while (i < lines.size && '|' in lines[i] && lines[i].isNotBlank()) {
+                val cells = mdTableCells(lines[i++])
+                rows += head.indices.map { column -> mdInline(cells.getOrElse(column) { "" }) }
+            }
+            blocks += MdBlock.Table(align, head.map(::mdInline), rows)
+            continue
+        }
         val heading = HEADING.find(line)
         if (heading != null) {
             flush()
@@ -93,15 +162,17 @@ fun mdParse(markdown: String): List<MdBlock> {
             continue
         }
         val bullet = BULLET.find(line)
-        val item = bullet ?: NUMBER.find(line)
-        if (item != null) {
+        val number = if (bullet == null) NUMBER.find(line) else null
+        if (bullet != null || number != null) {
             flush()
             val ordered = bullet == null
+            val text = mdInline(bullet?.groupValues?.get(1) ?: number!!.groupValues[2])
             val last = blocks.lastOrNull()
             if (last is MdBlock.Bullets && last.ordered == ordered) {
-                blocks[blocks.lastIndex] = last.copy(items = last.items + listOf(mdInline(item.groupValues[1])))
+                blocks[blocks.lastIndex] = last.copy(items = last.items + listOf(text))
             } else {
-                blocks += MdBlock.Bullets(ordered, listOf(mdInline(item.groupValues[1])))
+                // A list that carries on after something else ("4." after a few bullets) keeps the number it starts at.
+                blocks += MdBlock.Bullets(ordered, listOf(text), start = number?.groupValues?.get(1)?.toIntOrNull() ?: 1)
             }
             continue
         }

@@ -1,5 +1,8 @@
 """Composition root: settings, the two engines, routes, health."""
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import FastAPI
@@ -14,7 +17,7 @@ from thursday_runtime.serve import serve
 from thursday_runtime.settings import CommonSettings, env_file
 
 from thursday_speech import __version__
-from thursday_speech.application.speech import Speaker, SpeechService, Transcriber
+from thursday_speech.application.speech import Decoder, Speaker, SpeechService, Transcriber
 from thursday_speech.transport.http import build_router
 
 SERVICE = ServiceName.SPEECH
@@ -26,10 +29,15 @@ class SpeechSettings(CommonSettings):
     )
 
     speech_stt_model: str = Field(default="small", max_length=60)  # a faster-whisper model size or name
+    # A speech engine nobody has used for this many minutes is dropped from memory; 0 keeps it loaded.
+    speech_idle_unload_minutes: float = Field(default=5, ge=0, le=1440)
 
 
 def create_app(
-    settings: SpeechSettings | None = None, transcriber: Transcriber | None = None, speaker: Speaker | None = None
+    settings: SpeechSettings | None = None,
+    transcriber: Transcriber | None = None,
+    speaker: Speaker | None = None,
+    decoder: Decoder | None = None,
 ) -> FastAPI:
     settings = settings or SpeechSettings()
     if transcriber is None or speaker is None:
@@ -37,9 +45,21 @@ def create_app(
 
         transcriber = transcriber or WhisperTranscriber(settings.speech_stt_model)
         speaker = speaker or KokoroSpeaker(service_data_dir(SERVICE.value, settings.thursday_data_dir) / "models")
-    speech = SpeechService(transcriber, speaker)
+    if decoder is None:
+        from thursday_speech.infrastructure.decode import to_wav as decoder
+    speech = SpeechService(transcriber, speaker, decoder)
 
-    app = FastAPI(title="Thursday speech", version=__version__, docs_url=None, redoc_url=None)
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        stop = asyncio.Event()
+        idle = asyncio.create_task(speech.idle_loop(stop, settings.speech_idle_unload_minutes), name="idle-unload")
+        try:
+            yield
+        finally:
+            stop.set()
+            await idle
+
+    app = FastAPI(title="Thursday speech", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.include_router(build_health_router(SERVICE, __version__))
     app.include_router(build_router(speech, ServiceTokenAuth(settings.thursday_service_token)))
 

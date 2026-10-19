@@ -1,10 +1,13 @@
 <!-- System prompts with versions. Saving always makes a new version; restoring loads an old one into
-     the editor so you can look before saving it. -->
+     the editor so you can look before saving it. Save and Discard are the ones at the top right of Settings. -->
 <script lang="ts">
   import { api } from '../../lib/api/gateway';
   import type { Agent, PromptVersion } from '../../lib/api/types';
   import { app, errorText, relativeTime } from '../../lib/state/app.svelte';
   import { ui } from '../../lib/state/ui.svelte';
+  import type { SaveBar } from './savebar.svelte';
+
+  let { bar }: { bar: SaveBar } = $props();
 
   let agent = $state<Agent>('main');
   let text = $state('');
@@ -14,7 +17,6 @@
   let fallback = $state('');
   let error = $state('');
   let loading = $state(true);
-  let busy = $state(false);
 
   async function load(which: Agent) {
     loading = true;
@@ -37,23 +39,35 @@
     void load(agent);
   });
 
-  async function pick(next: Agent) {
-    if (text !== saved && !(await ui.ask({ title: 'Discard changes?', body: 'Your edits to this prompt have not been saved.', action: 'Discard', danger: true }))) return;
-    agent = next;
-  }
+  $effect(() =>
+    bar.attach({
+      save: async () => {
+        if (!text.trim()) {
+          error = 'The prompt cannot be empty.';
+          throw new Error(error);
+        }
+        error = '';
+        await api.savePrompt(agent, text);
+        app.toast(`Saved version ${version + 1}. New tasks use it.`, 'ok');
+        await load(agent);
+      },
+      discard: () => (text = saved),
+    }),
+  );
 
-  async function save() {
-    busy = true;
-    error = '';
-    try {
-      await api.savePrompt(agent, text);
-      app.toast(`Saved version ${version + 1}. New tasks use it.`, 'ok');
-      await load(agent);
-    } catch (e) {
-      error = errorText(e);
-    } finally {
-      busy = false;
+  $effect(() => {
+    bar.dirty = !loading && text !== saved;
+    bar.label = `Save as version ${version + 1}`;
+  });
+
+  async function pick(next: Agent) {
+    if (next === agent) return;
+    if (bar.dirty) {
+      const choice = await ui.askUnsaved('Your edits to this prompt have not been saved.', bar.label);
+      if (choice === 'cancel') return;
+      if (choice === 'save' && !(await bar.run())) return;
     }
+    agent = next;
   }
 
   const when = (iso: string) => relativeTime(iso);
@@ -70,10 +84,6 @@
 <div class="prompt-layout">
   <div class="stack">
     <textarea class="input" aria-label="System prompt" bind:value={text} disabled={loading} spellcheck="false"></textarea>
-    <div class="hstack">
-      <button class="btn primary" disabled={busy || loading || text === saved || !text.trim()} onclick={save}>Save as version {version + 1}</button>
-      <button class="btn plain" disabled={text === saved} onclick={() => (text = saved)}>Discard changes</button>
-    </div>
   </div>
   <div class="card stack" style="padding:0">
     <h3 style="padding:var(--space-3) var(--space-4) 0">Versions</h3>

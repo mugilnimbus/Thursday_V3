@@ -16,12 +16,18 @@ import androidx.compose.ui.unit.dp
 
 /* The dashboard's line icons (24 by 24 SVG paths), drawn as strokes. */
 private val PATHS = mapOf(
+    "phone" to "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2",
+    "link" to "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    "chip" to "M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4",
+    "devices" to "M4 5h12v9H4zM2 17h16M18 9h4v10h-4z",
+    "database" to "M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3v12c0 1.7-3.1 3-7 3s-7-1.3-7-3zM5 6c0 1.7 3.1 3 7 3s7-1.3 7-3M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3",
     "chats" to "M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z",
     "trace" to "M4 6h16M4 12h10M4 18h6",
     "tools" to "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z",
     "monitor" to "M3 17l5-6 4 4 6-8 3 4",
     "settings" to "M4 7h9M17 7h3M4 17h3M11 17h9M15 4v6M9 14v6",
     "send" to "M12 19V5M5 12l7-7 7 7",
+    "direct" to "M13 3L5 14h6l-1 7 8-11h-6z",
     "mic" to "M9 6a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0zM5 11a7 7 0 0 0 14 0M12 18v3",
     "more" to "M5 12h.01M12 12h.01M19 12h.01",
     "plus" to "M12 5v14M5 12h14",
@@ -39,6 +45,8 @@ private val PATHS = mapOf(
     "speaker" to "M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12",
     "mute" to "M4 9v6h4l5 4V5L8 9H4zM17 9.5l5 5M22 9.5l-5 5",
     "alert" to "M12 3l10 18H2L12 3zM12 10v5M12 18h.01",
+    "copy" to "M10 8h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zM16 8V4H4v12h4",
+    "check" to "M5 12.5l4.5 4.5L19 7.5",
 )
 
 @Composable

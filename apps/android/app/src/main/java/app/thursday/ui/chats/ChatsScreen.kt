@@ -24,6 +24,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,8 +55,9 @@ import app.thursday.ui.theme.Space
 import app.thursday.ui.theme.Type
 import kotlinx.coroutines.launch
 
+/** The projects and their chats. `open` is the chat shown beside this list on a wide window, which is marked. */
 @Composable
-fun ChatsScreen(activity: MainActivity, nav: Nav) {
+fun ChatsScreen(activity: MainActivity, nav: Nav, open: String? = null) {
     val live = activity.graph.live
     val p = LocalPalette.current
     val scope = rememberCoroutineScope()
@@ -90,7 +92,7 @@ fun ChatsScreen(activity: MainActivity, nav: Nav) {
                     live.toast("Up to date.")
                 }
             })
-            IconButton("plus", "New project", { nav.push(Screen.NewProject) })
+            IconButton("plus", "New project", { nav.open(Screen.NewProject) })
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.s4), verticalArrangement = Arrangement.spacedBy(Space.s3)) {
             items(banners) { BannerRow(it.text) }
@@ -100,14 +102,14 @@ fun ChatsScreen(activity: MainActivity, nav: Nav) {
             if (loaded && projects.isEmpty()) item {
                 Column(verticalArrangement = Arrangement.spacedBy(Space.s3)) {
                     Caption("No projects yet. A project is a folder on your PC that Thursday may work in.", color = p.muted)
-                    Btn("Add a project folder", { nav.push(Screen.NewProject) }, look = Look.PRIMARY)
+                    Btn("Add a project folder", { nav.open(Screen.NewProject) }, look = Look.PRIMARY)
                 }
             }
             items(projects, key = { it.id }) { project ->
                 Column(verticalArrangement = Arrangement.spacedBy(Space.s2)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SectionTitle(project.name, Modifier.weight(1f))
-                        Btn("Files", { nav.push(Screen.Files(project.id, project.name)) }, look = Look.PLAIN, small = true)
+                        Btn("Files", { nav.open(Screen.Files(project.id, project.name)) }, look = Look.PLAIN, small = true)
                     }
                     ListBox {
                         (chats[project.id] ?: emptyList()).forEach { chat ->
@@ -117,7 +119,8 @@ fun ChatsScreen(activity: MainActivity, nav: Nav) {
                                 running.any { it.chatId == chat.id } -> "run"
                                 else -> ""
                             }
-                            ListRow(onClick = { nav.push(Screen.Chat(chat.id)) }) {
+                            Box(Modifier.background(if (chat.id == open) p.accentSoft else Color.Transparent)) {
+                            ListRow(onClick = { nav.open(Screen.Chat(chat.id)) }) {
                                 Dot(dot)
                                 Column(Modifier.weight(1f)) {
                                     Txt(chat.title, maxLines = 1)
@@ -128,11 +131,12 @@ fun ChatsScreen(activity: MainActivity, nav: Nav) {
                                 }
                                 ChatMenu(onRename = { renaming = chat }, onDelete = { deleting = chat })
                             }
+                            }
                         }
                         ListRow(onClick = {
                             scope.launch {
                                 try {
-                                    nav.push(Screen.Chat(live.createChat(project.id).id))
+                                    nav.open(Screen.Chat(live.createChat(project.id).id))
                                 } catch (e: ApiException) {
                                     live.toast(e.message ?: "Could not make a chat.")
                                 }

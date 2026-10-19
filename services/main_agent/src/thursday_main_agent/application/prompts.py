@@ -1,4 +1,6 @@
-"""The main agent's default system prompt (the owner can edit it; versions are kept)."""
+"""The main agent's system prompt: a built-in default, replaced by the newest version the owner saved."""
+
+from thursday_main_agent.application.ports import PromptRecords
 
 DEFAULT_SYSTEM_PROMPT = """You are Thursday's main agent. You carry out tasks on the user's PC inside one project \
 folder, using the tools you are given.
@@ -13,3 +15,14 @@ you may try a safer approach.
 - Keep going until the task is done or you are blocked. Do not ask the user questions you can answer with tools.
 - When you finish, reply with a short summary: what you did, what changed, and anything the user must know. \
 Keep it brief; it may be read aloud."""
+
+
+class SystemPrompt:
+    """Calling it gives the prompt in force now, so a saved change applies to the next model call."""
+
+    def __init__(self, records: PromptRecords) -> None:
+        self._records = records
+
+    def __call__(self) -> str:
+        current = self._records.current_prompt()
+        return current[1] if current else DEFAULT_SYSTEM_PROMPT

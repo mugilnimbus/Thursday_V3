@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from thursday_gateway.application.files import ProjectFiles, list_folders
+from thursday_gateway.application.files import ProjectFiles, is_hidden, list_folders, model_folders
 from thursday_gateway.application.projects import NotFound
 from thursday_gateway.domain.model import InvalidInput
 
@@ -51,3 +51,31 @@ def test_folder_picker_lists_only_folders(project: Path) -> None:
     assert list_folders("")["folders"], "an empty path lists the drives"
     with pytest.raises(InvalidInput):
         list_folders("relative/path")
+
+
+def test_a_dot_folder_is_listed_on_windows_and_hidden_elsewhere(tmp_path: Path) -> None:
+    import os
+    import sys
+
+    (tmp_path / ".lmstudio" / "models").mkdir(parents=True)
+    (tmp_path / "Documents").mkdir()
+    with os.scandir(tmp_path) as scan:
+        items = {item.name: item for item in scan}
+    assert not is_hidden(items[".lmstudio"], windows=True), "File Explorer shows it, so the folder picker does too"
+    assert is_hidden(items[".lmstudio"], windows=False) and not is_hidden(items["Documents"], windows=False)
+    if sys.platform == "win32":
+        import subprocess
+
+        (tmp_path / "Secret").mkdir()
+        subprocess.run(["attrib", "+h", str(tmp_path / "Secret")], check=True)
+        names = [f["name"] for f in list_folders(str(tmp_path))["folders"]]  # type: ignore[index]
+        assert names == [".lmstudio", "Documents"], "what Windows itself hides stays out of the list"
+        assert list_folders(str(tmp_path / "Secret"))["path"] == str(tmp_path / "Secret"), "a typed path still opens"
+
+
+def test_the_place_lm_studio_keeps_its_models_is_offered_only_when_it_exists(tmp_path: Path) -> None:
+    assert model_folders(tmp_path) == []
+    models = tmp_path / ".lmstudio" / "models"
+    models.mkdir(parents=True)
+    assert model_folders(tmp_path) == [{"name": "LM Studio's models", "path": str(models)}]
+    assert "model_folders" in list_folders("") and "model_folders" in list_folders(str(tmp_path))

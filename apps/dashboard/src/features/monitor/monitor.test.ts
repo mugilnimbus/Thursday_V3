@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MetricsSample } from '../../lib/api/types';
-import { gb, headline, hueFor, num, rate } from './monitor';
+import { bytesText, gb, headline, hueFor, num, rate, storedData } from './monitor';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
 
@@ -48,5 +48,15 @@ describe('monitor story', () => {
     expect([hueFor(0.5), hueFor(0.8), hueFor(0.95)]).toEqual(['calm', 'warm', 'alert']);
     expect([gb(12_288), gb(4000)]).toEqual(['12', '3.9']);
     expect([rate(500), rate(2048), rate(3_145_728)]).toEqual(['500 B/s', '2 kB/s', '3.0 MB/s']);
+  });
+
+  it('adds up the stored data and names each part', () => {
+    const s = sample({ storage: [{ name: 'main_agent', bytes: 154_000_000 }, { name: 'logs', bytes: 5_200_000 }, { name: 'other', bytes: 900 }] });
+    expect(storedData(s)).toEqual({
+      total: 159_200_900,
+      parts: [{ label: 'Main agent · tasks and saved steps', bytes: 154_000_000 }, { label: 'Log files', bytes: 5_200_000 }, { label: 'other', bytes: 900 }],
+    });
+    expect(storedData(sample())).toBeNull();
+    expect([bytesText(900), bytesText(21_400), bytesText(154_000_000), bytesText(1_240_000_000)]).toEqual(['900 B', '21 kB', '154 MB', '1.2 GB']);
   });
 });

@@ -3,10 +3,11 @@
 import json
 import sqlite3
 import threading
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from thursday_voice_agent.domain.tasks import DelegatedTask
 
 SCHEMA = """
 create table if not exists schema_version (version integer not null);
@@ -15,36 +16,23 @@ create table if not exists transcript (id integer primary key autoincrement, cha
 create index if not exists transcript_chat on transcript(chat_id, id);
 create table if not exists tasks (task_id text primary key, chat_id text not null, project_id text not null,
     instruction text not null, state text not null, summary text not null default '', push_token text not null,
-    approval_id text, approval_summary text, created_at text not null, updated_at text not null);
+    approval_id text, approval_summary text, created_at text not null, updated_at text not null,
+    direct integer not null default 0);
 create index if not exists tasks_chat on tasks(chat_id, created_at);
 create table if not exists turns (chat_id text not null, client_message_id text not null, reply text not null,
     created_at text not null, primary key (chat_id, client_message_id));
 create table if not exists prompts (version integer primary key autoincrement, text text not null,
     created_at text not null);
 create table if not exists settings (key text primary key, value text not null);
+create table if not exists deleted_chats (chat_id text primary key, deleted_at text not null);
 """
-TERMINAL = ("completed", "failed", "canceled", "rejected")
+DELETED_NOTE_DAYS = 7
+"""How long the note "this chat was deleted" is kept. Work that was under way when a chat was deleted ends within
+hours; after a week nothing can still arrive for it."""
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-@dataclass(slots=True)
-class DelegatedTask:
-    task_id: str
-    chat_id: str
-    project_id: str
-    instruction: str
-    state: str
-    summary: str
-    push_token: str
-    approval_id: str | None
-    approval_summary: str | None
-
-    @property
-    def open(self) -> bool:
-        return self.state not in TERMINAL
 
 
 class Store:
@@ -56,6 +44,11 @@ class Store:
         self._db.executescript(SCHEMA)
         if self._db.execute("select count(*) from schema_version").fetchone()[0] == 0:
             self._db.execute("insert into schema_version values (1)")
+        self._add_column("tasks", "direct", "integer not null default 0")  # databases made before direct mode
+
+    def _add_column(self, table: str, column: str, definition: str) -> None:
+        if column not in {r["name"] for r in self._db.execute(f"pragma table_info({table})")}:
+            self._db.execute(f"alter table {table} add column {column} {definition}")
 
     def _q(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -78,8 +71,20 @@ class Store:
         )
         return [json.loads(r["message"]) for r in rows]
 
+    def transcript_count(self, chat_id: str) -> int:
+        return int(self._q("select count(*) from transcript where chat_id = ?", (chat_id,))[0][0])
+
+    def transcript_from(self, chat_id: str, start: int) -> list[dict[str, Any]]:
+        """The chat's messages from the one at position `start` (0 is the first) to the newest."""
+        rows = self._q(
+            "select message from transcript where chat_id = ? order by id limit -1 offset ?", (chat_id, start)
+        )
+        return [json.loads(r["message"]) for r in rows]
+
     def append(self, chat_id: str, messages: list[dict[str, Any]]) -> None:
         with self._lock:
+            if self.chat_deleted(chat_id):
+                return
             self._db.executemany(
                 "insert into transcript (chat_id, message, created_at) values (?,?,?)",
                 [(chat_id, json.dumps(m, default=str), now()) for m in messages],
@@ -93,12 +98,23 @@ class Store:
         return rows[0]["reply"] if rows else None
 
     def save_turn(self, chat_id: str, client_message_id: str, reply: str) -> None:
-        self._x("insert or replace into turns values (?,?,?,?)", (chat_id, client_message_id, reply, now()))
+        with self._lock:
+            if not self.chat_deleted(chat_id):
+                self._x("insert or replace into turns values (?,?,?,?)", (chat_id, client_message_id, reply, now()))
+
+    def prune_turns(self, before: datetime) -> int:
+        """Forget which messages were answered before the moment given. Returns how many records went."""
+        return self._x("delete from turns where created_at < ?", (before.isoformat(),))
 
     # delegated tasks
     def add_task(self, t: DelegatedTask) -> None:
+        """Remember a task that was handed over. A task that is already known stays as it is: a request that was
+        sent again is answered with the task its first sending started."""
+        if self.chat_deleted(t.chat_id):
+            return
         self._x(
-            "insert into tasks values (?,?,?,?,?,?,?,?,?,?,?)",
+            "insert or ignore into tasks (task_id, chat_id, project_id, instruction, state, summary, push_token, "
+            "approval_id, approval_summary, created_at, updated_at, direct) values (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 t.task_id,
                 t.chat_id,
@@ -111,6 +127,7 @@ class Store:
                 t.approval_summary,
                 now(),
                 now(),
+                int(t.direct),
             ),
         )
 
@@ -138,11 +155,14 @@ class Store:
         self._x(f"update tasks set {', '.join(sets)} where task_id = ?", (*params, task_id))  # noqa: S608 - fixed columns
 
     def tasks_for_chat(self, chat_id: str, open_only: bool = False) -> list[DelegatedTask]:
-        tasks = [
+        """The chat's newest tasks. With `open_only`, every task that has not ended, however old it is."""
+        if open_only:
+            rows = self._q("select * from tasks where chat_id = ? order by created_at desc", (chat_id,))
+            return [t for t in (self._task(r) for r in rows) if t.open]
+        return [
             self._task(r)
             for r in self._q("select * from tasks where chat_id = ? order by created_at desc limit 20", (chat_id,))
         ]
-        return [t for t in tasks if t.open] if open_only else tasks
 
     def open_tasks(self) -> list[DelegatedTask]:
         return [t for t in (self._task(r) for r in self._q("select * from tasks")) if t.open]
@@ -167,12 +187,21 @@ class Store:
             r["push_token"],
             r["approval_id"],
             r["approval_summary"],
+            bool(r["direct"]),
         )
 
     def delete_chat(self, chat_id: str) -> None:
+        """Remove everything kept for the chat, and note that it was deleted: from here on nothing is written for
+        it again, whatever was still under way (a reply being written, a task's report). Safe to repeat."""
         with self._lock:
             for table in ("transcript", "tasks", "turns"):
                 self._db.execute(f"delete from {table} where chat_id = ?", (chat_id,))  # noqa: S608 - fixed tables
+            self._db.execute("insert or replace into deleted_chats values (?, ?)", (chat_id, now()))
+            old = (datetime.now(UTC) - timedelta(days=DELETED_NOTE_DAYS)).isoformat()
+            self._db.execute("delete from deleted_chats where deleted_at < ?", (old,))
+
+    def chat_deleted(self, chat_id: str) -> bool:
+        return bool(self._q("select 1 from deleted_chats where chat_id = ?", (chat_id,)))
 
     # settings (non-secret, JSON)
     def get_setting(self, key: str) -> Any:

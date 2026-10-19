@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import httpx
-from thursday_contracts.metrics import METRICS_PATH, GpuSample, MetricsSample, ServiceSample
+from thursday_contracts.metrics import METRICS_PATH, GpuSample, MetricsSample, ServiceSample, StorageSample
 
 log = logging.getLogger(__name__)
+STORAGE_EVERY_SECONDS = 60.0  # stored data grows slowly; measuring it every sample would be waste
 
 
 class Host(Protocol):
@@ -25,6 +26,12 @@ class Host(Protocol):
     def gpus(self) -> list[GpuSample]: ...
 
 
+class Storage(Protocol):
+    """How much disk each service's stored data uses."""
+
+    def sizes(self) -> list[StorageSample]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Target:
     name: str
@@ -33,9 +40,18 @@ class Target:
 
 class Collector:
     def __init__(
-        self, host: Host, targets: list[Target], gateway_url: str, token: str, client: httpx.AsyncClient | None = None
+        self,
+        host: Host,
+        targets: list[Target],
+        gateway_url: str,
+        token: str,
+        client: httpx.AsyncClient | None = None,
+        storage: Storage | None = None,
     ) -> None:
         self._host = host
+        self._storage = storage
+        self._stored: list[StorageSample] = []
+        self._stored_at: float | None = None
         self._targets = targets
         self._push_url = gateway_url.rstrip("/") + "/v1/metrics"
         self._headers = {"Authorization": f"Bearer {token}"}
@@ -55,6 +71,19 @@ class Collector:
             name=target.name, up=True, latency_ms=round((time.perf_counter() - started) * 1000, 1), metrics=metrics
         )
 
+    async def _storage_sizes(self) -> list[StorageSample]:
+        """The data sizes, measured again once the last measurement is a minute old."""
+        if self._storage is None:
+            return []
+        now = time.monotonic()
+        if self._stored_at is None or now - self._stored_at >= STORAGE_EVERY_SECONDS:
+            self._stored_at = now
+            try:
+                self._stored = await asyncio.to_thread(self._storage.sizes)
+            except OSError as exc:
+                log.warning("could not measure the stored data: %s", type(exc).__name__)
+        return self._stored
+
     async def sample(self) -> MetricsSample:
         cpu, ram_used, ram_total = self._host.cpu_ram()
         rx, tx = self._host.network()
@@ -68,6 +97,7 @@ class Collector:
             net_tx_bytes_per_s=round(tx, 1),
             gpus=await asyncio.to_thread(self._host.gpus),
             services=list(services),
+            storage=await self._storage_sizes(),
         )
 
     async def push(self, sample: MetricsSample) -> bool:

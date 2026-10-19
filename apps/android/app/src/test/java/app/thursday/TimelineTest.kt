@@ -1,6 +1,7 @@
 package app.thursday
 
 import app.thursday.domain.Event
+import app.thursday.domain.Tone
 import app.thursday.domain.agentStats
 import app.thursday.domain.buildTasks
 import app.thursday.domain.liveLine
@@ -49,6 +50,56 @@ class TimelineTest {
         assertNull(liveLine(task))
     }
 
+    private fun call(key: String, status: String, tool: String = "fs.read", extra: Map<String, Any?> = emptyMap()) =
+        ev("tool_call", mapOf("call_key" to key, "tool" to tool, "arguments" to mapOf("path" to "$key.txt"), "status" to status) + extra)
+
+    @Test
+    fun aToolCallShowsWhenRequestedAndSettlesGreenOrRedWhenItEnds() {
+        val working = ev("task_state", mapOf("state" to "working"))
+        fun lines(vararg events: Event) = buildTasks(listOf(working) + events).getValue("t1").lines
+        val request = call("k1", "requested")
+        assertEquals(listOf("fs.read k1.txt" to Tone.RUN), lines(request).map { it.text to it.tone })
+        assertEquals(listOf("fs.read k1.txt → hello" to Tone.OK), lines(request, call("k1", "ok", extra = mapOf("result" to "hello"))).map { it.text to it.tone })
+        assertEquals(listOf("fs.read k1.txt → no such file" to Tone.BAD), lines(request, call("k1", "error", extra = mapOf("result" to "no such file"))).map { it.text to it.tone })
+        assertEquals(Tone.WARN, lines(request, call("k1", "unknown")).single().tone)
+    }
+
+    @Test
+    fun oneLinePerCallInTheOrderTheyWereRequested() {
+        val task = buildTasks(
+            listOf(
+                ev("task_state", mapOf("state" to "working")),
+                call("a", "requested"), call("b", "requested"),
+                call("a", "running"), call("b", "ok", extra = mapOf("result" to "B")), call("a", "ok", extra = mapOf("result" to "A")),
+            ),
+        ).getValue("t1")
+        assertEquals(listOf("fs.read a.txt → A", "fs.read b.txt → B"), task.lines.map { it.text })
+    }
+
+    @Test
+    fun aResultWithoutItsRequestStillShows() {
+        val task = buildTasks(listOf(call("z", "ok", extra = mapOf("result" to "Z")))).getValue("t1")
+        assertEquals(listOf("fs.read z.txt → Z" to Tone.OK), task.lines.map { it.text to it.tone })
+    }
+
+    @Test
+    fun aCallIsNotLeftPulsingOnceTheTaskHasEnded() {
+        val task = buildTasks(listOf(call("k", "requested", "shell"), ev("task_state", mapOf("state" to "canceled")))).getValue("t1")
+        assertEquals("shell k.txt → did not finish" to Tone.WARN, task.lines.first().let { it.text to it.tone })
+    }
+
+    @Test
+    fun aTaskSentStraightToTheMainAgentIsPlacedWhereTheVoiceAgentAnnouncedIt() {
+        // The main agent announces the task first; the voice agent publishes the user's message and its own delegation after.
+        val main = ev("delegation", mapOf("instruction" to "hii"))
+        val voice = ev("delegation", mapOf("instruction" to "hii", "by" to "direct"), source = "voice")
+        val direct = buildTasks(listOf(main, voice)).getValue("t1")
+        assertEquals(voice.pos, direct.directPos)
+        assertEquals("the main agent's event is still where the task began", main.pos, direct.firstPos)
+        val normal = buildTasks(listOf(main, ev("delegation", mapOf("instruction" to "hii"), source = "voice"))).getValue("t1")
+        assertNull(normal.directPos)
+    }
+
     @Test
     fun liveLineWhileWaiting() {
         val waiting = buildTasks(flow.take(6) + ev("task_state", mapOf("state" to "input_required"))).getValue("t1")
@@ -65,7 +116,15 @@ class TimelineTest {
     fun statsUseTheLatestSuccessfulCall() {
         val stats = agentStats(flow, "main")
         assertEquals(62, stats.tokensPerSecond)
-        assertEquals(3, stats.contextPercent)
-        assertNull(agentStats(flow, "voice").contextPercent)
+        assertEquals(true, (stats.contextTokens ?: 0) > 0)
+        assertNull(agentStats(flow, "voice").contextTokens)
+    }
+
+    @Test
+    fun contextIsWordedAsTokensInUseAndTheWindow() {
+        assertEquals("4412/16384", app.thursday.domain.contextText(4412, 16384))
+        assertEquals("loaded, not asked anything in this chat yet", "–/16384", app.thursday.domain.contextText(null, 16384))
+        assertEquals("an endpoint that does not report its window", "900 tokens", app.thursday.domain.contextText(900, null))
+        assertEquals("", app.thursday.domain.contextText(null, null))
     }
 }

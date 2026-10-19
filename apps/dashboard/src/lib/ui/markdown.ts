@@ -12,9 +12,12 @@ export type Span =
 export type Block =
   | { kind: 'heading'; level: number; spans: Span[] }
   | { kind: 'paragraph'; spans: Span[] }
-  | { kind: 'list'; ordered: boolean; items: Span[][] }
+  | { kind: 'list'; ordered: boolean; items: Span[][]; start?: number }
   | { kind: 'code'; text: string }
+  | { kind: 'table'; align: Align[]; head: Span[][]; rows: Span[][][] }
   | { kind: 'rule' };
+
+export type Align = 'left' | 'center' | 'right';
 
 const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(__[^_\n]+?__)|(\*[^*\s][^*\n]*?\*)|(\[[^\]\n]+\]\([^)\s]+\))/;
 
@@ -45,10 +48,44 @@ export function inline(text: string): Span[] {
 }
 
 const BULLET = /^\s*[-*+•]\s+(.*)$/;
-const NUMBER = /^\s*\d+[.)]\s+(.*)$/;
+const NUMBER = /^\s*(\d+)[.)]\s+(.*)$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const FENCE = /^\s*```/;
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
+const DIVIDER_CELL = /^:?-+:?$/;
+
+/** The cells of one table row. A pipe inside `code` or written as \| belongs to its cell. */
+export function tableCells(line: string): string[] {
+  const cells: string[] = [];
+  let cell = '';
+  let code = false;
+  const text = line.trim();
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\' && text[i + 1] === '|') {
+      cell += '|';
+      i++;
+    } else if (c === '|' && !code) {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      if (c === '`') code = !code;
+      cell += c;
+    }
+  }
+  cells.push(cell.trim());
+  if (text.startsWith('|')) cells.shift();
+  if (text.endsWith('|') && !text.endsWith('\\|')) cells.pop();
+  return cells;
+}
+
+/** How each column is aligned, when the line is the row of dashes under a table's heading; otherwise null. */
+function tableDivider(line: string): Align[] | null {
+  if (!line.includes('|') && !line.includes(':')) return null; // a bare "---" is a rule, not a one-column table
+  const cells = tableCells(line);
+  if (!cells.length || !cells.every((c) => DIVIDER_CELL.test(c))) return null;
+  return cells.map((c) => (c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : 'left'));
+}
 
 export function parse(markdown: string): Block[] {
   const blocks: Block[] = [];
@@ -71,6 +108,20 @@ export function parse(markdown: string): Block[] {
       flush();
       continue;
     }
+    // A table: a row of cells, then a row of dashes with as many cells, then the rows until one has no pipe.
+    const align = line.includes('|') && i + 1 < lines.length ? tableDivider(lines[i + 1]) : null;
+    const head = align ? tableCells(line) : [];
+    if (align && head.length === align.length) {
+      flush();
+      const rows: Span[][][] = [];
+      for (i += 2; i < lines.length && lines[i].includes('|') && lines[i].trim(); i++) {
+        const cells = tableCells(lines[i]);
+        rows.push(head.map((_, column) => inline(cells[column] ?? '')));
+      }
+      i--;
+      blocks.push({ kind: 'table', align, head: head.map(inline), rows });
+      continue;
+    }
     const heading = HEADING.exec(line);
     if (heading) {
       flush();
@@ -82,13 +133,16 @@ export function parse(markdown: string): Block[] {
       blocks.push({ kind: 'rule' });
       continue;
     }
-    const item = BULLET.exec(line) ?? NUMBER.exec(line);
-    if (item) {
+    const bullet = BULLET.exec(line);
+    const number = bullet ? null : NUMBER.exec(line);
+    if (bullet || number) {
       flush();
-      const ordered = !BULLET.test(line);
+      const text = inline(bullet ? bullet[1] : number![2]);
       const last = blocks.at(-1);
-      if (last?.kind === 'list' && last.ordered === ordered) last.items.push(inline(item[1]));
-      else blocks.push({ kind: 'list', ordered, items: [inline(item[1])] });
+      if (last?.kind === 'list' && last.ordered === !bullet) last.items.push(text);
+      else if (bullet) blocks.push({ kind: 'list', ordered: false, items: [text] });
+      // A list that carries on after something else ("4." after a few bullets) keeps the number it starts at.
+      else blocks.push({ kind: 'list', ordered: true, start: Number(number![1]), items: [text] });
       continue;
     }
     // An indented line right after a list item continues that item.

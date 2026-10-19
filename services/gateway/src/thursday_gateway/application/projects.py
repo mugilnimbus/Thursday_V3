@@ -4,8 +4,8 @@ import os
 import uuid
 from datetime import UTC, datetime
 
+from thursday_gateway.application.ports import ProjectRecords
 from thursday_gateway.domain.model import Chat, InvalidInput, Project, RecordState, clean_name
-from thursday_gateway.infrastructure.store import Store
 
 
 class NotFound(Exception):
@@ -23,7 +23,7 @@ def checked_folder(folder: str) -> str:
 
 
 class ProjectService:
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: ProjectRecords) -> None:
         self._store = store
 
     def create_project(self, name: str, folder: str) -> Project:
@@ -64,12 +64,16 @@ class ProjectService:
         self._store.save_chat(chat)
         return chat
 
-    def mark_chat_deleting(self, chat_id: str) -> None:
-        chat = self._store.chat(chat_id)
-        if chat is None:
-            return
-        chat.state = RecordState.DELETING
+    def set_chat_direct(self, chat_id: str, direct: bool) -> Chat:
+        chat = self.get_chat(chat_id)
+        chat.direct = direct
         self._store.save_chat(chat)
+        return chat
+
+    def mark_chat_deleting(self, chat_id: str) -> None:
+        """The first step of deleting a chat. Its waiting messages fail with it, so none is sent afterwards."""
+        if self._store.chat(chat_id) is not None:
+            self._store.begin_chat_delete(chat_id)
 
     def mark_project_deleting(self, project_id: str) -> None:
         project = self._store.project(project_id)

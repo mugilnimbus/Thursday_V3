@@ -4,8 +4,9 @@ from typing import Any, Protocol
 
 
 class CallAudit(Protocol):
-    def start(self, tool: str, arguments: dict[str, object], permission: str) -> Any:
-        """Record a call starting; returns an opaque handle for `finish`."""
+    def start(self, tool: str, arguments: dict[str, object], permission: str, chat_id: str | None = None) -> Any:
+        """Record a call starting, and the chat it was made for when known; returns an opaque handle for
+        `finish`."""
         ...
 
     def finish(self, record: Any, outcome: str, detail: str = "") -> None: ...

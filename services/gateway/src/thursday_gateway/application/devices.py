@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from thursday_gateway.application.ports import DeviceRecords
 from thursday_gateway.application.projects import NotFound
 from thursday_gateway.domain.model import InvalidInput, clean_name
-from thursday_gateway.infrastructure.store import Store
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I
 CODE_LENGTH = 8
@@ -61,21 +61,13 @@ class _Active:
 
 
 class DeviceService:
-    def __init__(self, store: Store, clock: Callable[[], float] = time.monotonic) -> None:
-        self._store = store
+    def __init__(self, devices: DeviceRecords, clock: Callable[[], float] = time.monotonic) -> None:
+        self._devices = devices
         self._clock = clock
         self._active: _Active | None = None
         self._failures: deque[float] = deque()
         self._seen: dict[str, float] = {}
         self._watchers: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Event]]] = {}
-        with store.tx() as db:
-            db.execute(
-                "create table if not exists devices (device_id text primary key, name text not null, "
-                "token_hash text not null unique, created_at text not null, revoked integer not null default 0)"
-            )
-            columns = {r[1] for r in db.execute("pragma table_info(devices)")}
-            if "last_seen" not in columns:
-                db.execute("alter table devices add column last_seen text")
 
     # --- pairing -----------------------------------------------------------------------------
     def create_code(self) -> PairingCode:
@@ -109,13 +101,7 @@ class DeviceService:
         self._active = None
         device_id = f"dev-{uuid.uuid4().hex[:12]}"
         token = secrets.token_urlsafe(32)
-        stamp = datetime.now(UTC).isoformat()
-        with self._store.tx() as db:
-            db.execute(
-                "insert into devices (device_id, name, token_hash, created_at, revoked, last_seen) "
-                "values (?,?,?,?,0,?)",
-                (device_id, device_name, token_hash(token), stamp, stamp),
-            )
+        self._devices.add(device_id, device_name, token_hash(token), datetime.now(UTC).isoformat())
         return device_id, token
 
     # --- tokens --------------------------------------------------------------------------------
@@ -124,30 +110,21 @@ class DeviceService:
         if len(token) < 32:
             return None
         wanted = token_hash(token)
-        rows = self._store.query("select device_id, token_hash from devices where revoked = 0")
-        device_id = next((r["device_id"] for r in rows if hmac.compare_digest(wanted, r["token_hash"])), None)
+        known = self._devices.token_hashes()
+        device_id = next((r["device_id"] for r in known if hmac.compare_digest(wanted, r["token_hash"])), None)
         if device_id is not None:
             now = self._clock()
             if now - self._seen.get(device_id, -LAST_SEEN_EVERY_SECONDS) >= LAST_SEEN_EVERY_SECONDS:
                 self._seen[device_id] = now
-                with self._store.tx() as db:
-                    stamp = datetime.now(UTC).isoformat()
-                    db.execute("update devices set last_seen = ? where device_id = ?", (stamp, device_id))
+                self._devices.seen(device_id, datetime.now(UTC).isoformat())
         return device_id
 
     # --- management ---------------------------------------------------------------------------
     def list(self) -> list[dict[str, Any]]:
-        rows = self._store.query(
-            "select device_id, name, created_at, last_seen from devices where revoked = 0 order by created_at"
-        )
-        return [dict(r) for r in rows]
+        return self._devices.list()
 
     def revoke(self, device_id: str) -> None:
-        with self._store.tx() as db:
-            changed = db.execute(
-                "update devices set revoked = 1 where device_id = ? and revoked = 0", (device_id,)
-            ).rowcount
-        if not changed:
+        if not self._devices.revoke(device_id):
             raise NotFound(device_id)
         self._seen.pop(device_id, None)
         for loop, event in self._watchers.pop(device_id, []):

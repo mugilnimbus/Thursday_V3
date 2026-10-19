@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ago, buildChart, slots } from './series';
+import { ago, buildChart, slots, waitText } from './series';
 
 describe('time slots', () => {
   it('places samples by time and leaves empty slots where there is no data', () => {
@@ -42,4 +42,8 @@ describe('chart', () => {
 
 it('describes how long ago a call was', () => {
   expect([ago(5000), ago(180_000), ago(7_200_000)]).toEqual(['5 s ago', '3 min ago', '2 h ago']);
+});
+
+it('gives the wait for a first token to a hundredth of a second, and in whole seconds from ten', () => {
+  expect([waitText(0.081), waitText(0.4), waitText(2.862), waitText(14.4)]).toEqual(['0.08 s', '0.40 s', '2.86 s', '14 s']);
 });

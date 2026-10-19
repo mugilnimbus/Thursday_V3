@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -23,10 +24,15 @@ class LiveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val graph = applicationContext.graph
-        ServiceCompat.startForeground(
-            this, Notifier.CONNECTION_ID, graph.notifier.connection("Connecting to your PC…"),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING,
-        )
+        val notification = graph.notifier.connection("Connecting to your PC…")
+        // The `remoteMessaging` type exists from Android 14; before that a foreground service needs no type.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceCompat.startForeground(
+                this, Notifier.CONNECTION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING,
+            )
+        } else {
+            startForeground(Notifier.CONNECTION_ID, notification)
+        }
         graph.live.start()
         if (watch == null) {
             watch = graph.scope.launch {

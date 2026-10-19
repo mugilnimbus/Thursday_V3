@@ -28,6 +28,13 @@ class ServiceSample(BaseModel):
     metrics: dict[str, MetricValue] = Field(default_factory=dict)
 
 
+class StorageSample(BaseModel):
+    """How much disk one service's stored data uses (its databases), or the log files."""
+
+    name: str
+    bytes: int
+
+
 class MetricsSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,3 +46,4 @@ class MetricsSample(BaseModel):
     net_tx_bytes_per_s: float
     gpus: list[GpuSample] = Field(default_factory=list)
     services: list[ServiceSample] = Field(default_factory=list)
+    storage: list[StorageSample] = Field(default_factory=list)

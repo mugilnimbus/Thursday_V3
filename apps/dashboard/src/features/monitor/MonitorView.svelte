@@ -9,8 +9,8 @@
   import { formatContext } from '../../lib/state/timeline';
   import Gauge from '../../lib/ui/Gauge.svelte';
   import Spark from '../../lib/ui/Spark.svelte';
-  import { SERVICE_LABEL, gb, gpuMemory, headline, hueFor, num, rate, service } from './monitor';
-  import { ago, buildChart, slots, spanText, type ChartOptions } from './series';
+  import { SERVICE_LABEL, bytesText, gb, gpuMemory, headline, hueFor, num, rate, service, storedData } from './monitor';
+  import { ago, buildChart, slots, spanText, waitText, type ChartOptions } from './series';
 
   type Range = '15m' | '1h' | '24h' | '7d';
   const SPAN_MS: Record<Range, number> = { '15m': 900_000, '1h': 3_600_000, '24h': 86_400_000, '7d': 604_800_000 };
@@ -151,13 +151,11 @@
     if (threshold) parts.push(`summarise at ${threshold}%`);
     return parts.join(' · ');
   });
-  const ttft = $derived.by(() => {
-    const [main, voice] = (['main', 'voice'] as const).map((a) => lastCall(a)?.ttft_seconds ?? null);
-    if (main === null && voice === null) return '—';
-    return `${main?.toFixed(1) ?? '—'} · ${voice?.toFixed(1) ?? '—'} s`;
-  });
+  /** How long the agent's last answer took to start: from sending the request to the first text or tool call. */
+  const lastWait = (agent: Agent) => calls.filter((c) => c.agent === agent && c.ttft_seconds != null).at(-1)?.ttft_seconds ?? null;
   const backlog = $derived((num(latest, 'main_agent', 'outbox_backlog') ?? 0) + (num(latest, 'voice_agent', 'outbox_backlog') ?? 0));
   const awake = $derived(service(latest, 'main_agent')?.metrics.keeping_awake);
+  const stored = $derived(storedData(latest));
 </script>
 
 <section class="view page on" aria-label="Monitor">
@@ -238,19 +236,21 @@
     {#each [['main', 'Main', models.main], ['voice', 'Voice', models.voice]] as const as [agent, label, settings] (agent)}
       {@const last = lastCall(agent)}
       {@const count = calls.filter((c) => c.agent === agent).length}
+      {@const wait = lastWait(agent)}
+      {@const waits = callChart(agent, (c) => c.ttft_seconds, { zero: true })}
       <div class="tile" data-state="info">
         <div class="label">{label}{settings ? ` · ${modelName(settings)}` : ''} <span>tokens/s</span></div>
         <div class="value">{last?.tokens_per_second != null ? Math.round(last.tokens_per_second) : '—'}</div>
         <span class="caption range">{last ? `last call ${ago(now - Date.parse(last.ts))} · ${count} ${count === 1 ? 'call' : 'calls'}, one dot each` : `no calls in ${spanText(range)}`}</span>
         <Spark chart={callChart(agent, (c) => c.tokens_per_second, { zero: true })} />
       </div>
+      <div class="tile" data-state="calm">
+        <div class="label">{label} <span>time to first token</span></div>
+        <div class="value">{wait === null ? '—' : waitText(wait)}</div>
+        <span class="caption range">{waits.max === null ? `no calls in ${spanText(range)}` : `${span(waits.min, waits.max, waitText)} · one dot per call`}</span>
+        <Spark chart={waits} />
+      </div>
     {/each}
-    <div class="tile" data-state="calm">
-      <div class="label">Time to first token <span>main · voice</span></div>
-      <div class="value">{ttft}</div>
-      <span class="caption range">main agent, one dot per call</span>
-      <Spark chart={callChart('main', (c) => c.ttft_seconds, { zero: true })} />
-    </div>
     <div class="tile" data-state="focus">
       <div class="label">Context in use <span>main · voice</span></div>
       <div class="value">{ctxUse('main')} · {ctxUse('voice')}</div>
@@ -283,6 +283,19 @@
         <div class="stat"><span class="caption">Events not yet delivered</span><span class="v">{latest ? backlog : '—'}</span></div>
         <div class="stat"><span class="caption">PC kept awake</span><span class="v" style="font-size:var(--text-base)">{awake === true ? (task?.state === 'input_required' ? 'Yes · task waiting' : 'Yes · task running') : awake === false ? 'No' : '—'}</span></div>
       </div>
+    </div>
+  </div>
+
+  <div class="card stack" aria-label="Stored data">
+    <div class="between">
+      <h2>Stored data</h2>
+      <span class="caption">Databases and logs on this PC. How long working data is kept is chosen in Settings, General.</span>
+    </div>
+    <div class="cols-auto" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+      <div class="stat"><span class="caption">Total</span><span class="v">{stored ? bytesText(stored.total) : '—'}</span></div>
+      {#each stored?.parts ?? [] as part (part.label)}
+        <div class="stat"><span class="caption">{part.label}</span><span class="v" style="font-size:var(--text-title)">{bytesText(part.bytes)}</span></div>
+      {/each}
     </div>
   </div>
 </section>

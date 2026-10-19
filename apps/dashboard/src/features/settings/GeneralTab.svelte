@@ -8,13 +8,13 @@
 
   let saved = $state<GeneralSettings | null>(null);
   let paused = $state('');
-  let traces = $state('');
+  let keep = $state('');
   let metrics = $state('');
   let error = $state('');
 
   function reset() {
     paused = saved?.keep_awake_paused_minutes != null ? String(saved.keep_awake_paused_minutes) : '';
-    traces = String(saved?.trace_retention_days ?? '');
+    keep = String(saved?.data_retention_days ?? '');
     metrics = String(saved?.metrics_retention_days ?? '');
   }
 
@@ -24,6 +24,10 @@
     return n;
   }
 
+  // How long working data is kept. A saved value that is not in the list (set in .env) stays selectable.
+  const PERIODS: [string, string][] = [['7', '7 days'], ['30', '30 days'], ['90', '3 months'], ['180', '6 months'], ['365', '1 year'], ['0', 'Until I delete it']];
+  const periods = $derived(!keep || PERIODS.some(([value]) => value === keep) ? PERIODS : [...PERIODS, [keep, `${keep} days (saved)`] as [string, string]]);
+
   $effect(() => {
     api.general().then(
       (g) => ((saved = g), reset()),
@@ -32,7 +36,7 @@
     return bar.attach({
       save: async () => {
         const changes: Partial<GeneralSettings> = {
-          trace_retention_days: whole(traces, 'Keep traces', 1, 3650),
+          data_retention_days: whole(keep, 'Keep working data', 0, 3650),
           metrics_retention_days: whole(metrics, 'Keep metrics', 1, 365),
         };
         if (saved?.main_agent_reachable) changes.keep_awake_paused_minutes = whole(paused, 'Minutes while paused', 0, 1440);
@@ -47,7 +51,7 @@
   $effect(() => {
     bar.dirty =
       !!saved &&
-      (traces !== String(saved.trace_retention_days) ||
+      (keep !== String(saved.data_retention_days) ||
         metrics !== String(saved.metrics_retention_days) ||
         (saved.keep_awake_paused_minutes != null && paused !== String(saved.keep_awake_paused_minutes)));
   });
@@ -67,7 +71,13 @@
     <input id="g-pause" class="input" inputmode="numeric" bind:value={paused} disabled={!saved?.main_agent_reachable} />
   </div>
   <div class="form-grid">
-    <div class="field"><label for="g-trace">Keep traces (days)</label><input id="g-trace" class="input" inputmode="numeric" bind:value={traces} /></div>
+    <div class="field">
+      <label for="g-keep">Keep working data for</label>
+      <select id="g-keep" class="input" bind:value={keep}>
+        {#each periods as [value, label] (value)}<option {value}>{label}</option>{/each}
+      </select>
+    </div>
     <div class="field"><label for="g-met">Keep metrics (days)</label><input id="g-met" class="input" inputmode="numeric" bind:value={metrics} /></div>
   </div>
+  <p class="caption" style="margin:0">Working data is how tasks were done: their steps and traces, the saved state of finished tasks, and the log of tool calls. It is removed after this time on every part of Thursday. Chats and their messages are not: they stay until you delete them. Monitor shows how much is stored.</p>
 </div>

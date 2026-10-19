@@ -12,12 +12,14 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from mcp.client.client import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp_types import CallToolResult, ElicitResult, InputRequiredResult, Tool
+from thursday_runtime.call_meta import CHAT_ID_META_KEY
 
 log = logging.getLogger(__name__)
 STARTUP_TIMEOUT_SECONDS = 30.0
@@ -53,15 +55,18 @@ class _ProjectServer:
 
 
 class McpManager:
-    def __init__(self, env_file: str, idle_stop_seconds: float) -> None:
+    def __init__(self, env_file: str, idle_stop_seconds: float, keep_days: Callable[[], int] = lambda: 30) -> None:
+        """`keep_days` says, each time a server starts, how long it keeps its call log (0: until deleted)."""
         self._env_file = env_file
         self._idle = idle_stop_seconds
+        self._keep_days = keep_days
         self._servers: dict[str, _ProjectServer] = {}
         self._lock = asyncio.Lock()
 
     def _params(self, project_id: str, folder: str) -> StdioServerParameters:
         env = {**os.environ, "THURSDAY_ENV_FILE": self._env_file, "PYTHONUTF8": "1"}
         args = ["-m", "thursday_tool_server", "--workspace", folder, "--project-id", project_id]
+        args += ["--keep-days", str(self._keep_days())]
         return StdioServerParameters(command=sys.executable, args=args, env=env)
 
     async def _own(self, server: _ProjectServer) -> None:
@@ -108,6 +113,7 @@ class McpManager:
         *,
         input_responses: dict[str, Any] | None = None,
         request_state: str | None = None,
+        chat_id: str | None = None,
     ) -> CallToolResult | InputRequiredResult:
         server = await self._get(project_id, folder)
         client = server.client
@@ -117,7 +123,12 @@ class McpManager:
         server.last_used = time.monotonic()
         try:
             result = await client.session.call_tool(
-                name, arguments, input_responses=input_responses, request_state=request_state, allow_input_required=True
+                name,
+                arguments,
+                input_responses=input_responses,
+                request_state=request_state,
+                meta={CHAT_ID_META_KEY: chat_id} if chat_id else None,
+                allow_input_required=True,
             )
         except Exception as exc:
             if not server.alive:
