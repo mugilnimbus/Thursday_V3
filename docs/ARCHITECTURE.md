@@ -4,7 +4,7 @@ Each picture is rendered from the Mermaid text folded under it, which is the edi
 
 ## System context (C4 level 1)
 
-![System context](diagrams/system-context.svg)
+![System context](images/system-context.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -43,7 +43,7 @@ Everything Thursday needs at run time is on your PC, unless you point an agent a
 
 This is the picture the root README shows.
 
-![System overview](diagrams/system-overview.svg)
+![System overview](images/system-overview.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -115,7 +115,7 @@ A client records audio and the gateway has it turned into text: by the voice age
 
 ### Events, logs, and metrics flow
 
-![Data flow](diagrams/data-flow.svg)
+![Data flow](images/data-flow.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -163,7 +163,7 @@ Those interfaces are the service's **ports**, in `application/ports.py`: each us
 
 ### Main agent
 
-![Main agent components](diagrams/main-agent-components.svg)
+![Main agent components](images/main-agent-components.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -197,7 +197,7 @@ flowchart TB
 
 #### The agent loop
 
-![Main agent loop](diagrams/main-agent-loop.svg)
+![Main agent loop](images/main-agent-loop.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -261,7 +261,7 @@ Domain objects: task state machine, approval rule (scoped to a chat), chat conte
 | Domain | Chat context, delegated-task record |
 | Infrastructure | LLM adapter with the same provider interface and settings, store and outbox (SQLite), metrics |
 
-![Voice agent loop](diagrams/voice-agent-loop.svg)
+![Voice agent loop](images/voice-agent-loop.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -318,7 +318,7 @@ Both agents use the same package (`packages/llm`). Each agent holds one **LLM ru
 
 ### Gateway
 
-![Gateway components](diagrams/gateway-components.svg)
+![Gateway components](images/gateway-components.svg)
 
 <details><summary>Mermaid source</summary>
 
@@ -465,7 +465,7 @@ Main agent execution: each task runs on its own LangGraph thread seeded from the
 - Every service has its own health and readiness checks and keeps running when another is down. The gateway shows banners for down dependencies, from the second missed readiness check in a row (one miss can be a busy moment, or a check that landed on a closed connection, which is asked again at once); Monitor shows service state and restart counts.
 - Every service keeps an unused connection open for 30 seconds (`thursday_runtime.serve`), longer than the five seconds its callers keep one. With both at five seconds, a caller that asks every five seconds reuses a connection in the moment the service closes it: measured, 6 of 40 readiness checks against a stand-in service failed that way and none of 40 with 30 seconds, and 2 of 60 failed against the running voice agent, each one a false "not running" banner.
 - Structured logs per service outside the repository, with rotation, carrying chat, task, and event IDs.
-- The PC is kept awake while a task is running or waiting for approval (a paused task holds it for up to 30 minutes by default); this cannot stop a manual sleep or lid close.
+- The PC is kept awake while a task is running or waiting for approval (a paused task holds it for up to 30 minutes by default): a power request on Windows, a systemd inhibitor lock on Linux, nothing on macOS. This cannot stop a manual sleep or lid close.
 - The repository is a monorepo: a folder per service, the dashboard, the Android app, and a small contracts package that contains only stable schemas.
 - Releases: the dashboard is built to static files; the Android app is a signed APK built locally (`./gradlew :app:assembleRelease`) that can be copied to any phone on the tailnet. The signing key and its password stay outside the repository.
 
@@ -473,4 +473,4 @@ Main agent execution: each task runs on its own LangGraph thread seeded from the
 
 - Live timeline and notifications reach clients within a few seconds under normal load; clients reconnect with a cursor and replay missed events.
 - Visible screens refresh; hidden screens do not poll. Monitor data is pushed to a client only while Monitor is visible.
-- Services time out and bounded-retry every cross-service call; each important interaction defines idempotency (see [CONTRACTS.md](CONTRACTS.md)).
+- Services time out and bounded-retry every cross-service call; each important interaction defines idempotency (see [API.md](API.md)).

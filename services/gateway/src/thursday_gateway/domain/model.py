@@ -13,6 +13,13 @@ class InvalidInput(ValueError):
     pass
 
 
+MAX_WAITING_PER_CHAT = 100
+
+
+class QueueFull(Exception):
+    """A chat already has the most messages it may have waiting for the voice agent."""
+
+
 class RecordState(StrEnum):
     ACTIVE = "active"
     DELETING = "deleting"

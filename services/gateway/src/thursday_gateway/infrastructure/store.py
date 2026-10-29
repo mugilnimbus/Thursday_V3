@@ -17,7 +17,16 @@ from typing import Any
 
 from thursday_contracts.events import EventEnvelope
 
-from thursday_gateway.domain.model import CHAT_DELETED, Chat, Outgoing, OutgoingStatus, Project, RecordState
+from thursday_gateway.domain.model import (
+    CHAT_DELETED,
+    MAX_WAITING_PER_CHAT,
+    Chat,
+    Outgoing,
+    OutgoingStatus,
+    Project,
+    QueueFull,
+    RecordState,
+)
 from thursday_gateway.infrastructure.projection import project_event
 
 SCHEMA = """
@@ -256,6 +265,8 @@ class Store:
             existing = db.execute(
                 "select * from outgoing where chat_id = ? and client_message_id = ?", (chat_id, client_message_id)
             ).fetchone()
+            if (not existing or existing["status"] == "failed") and self._waiting(db, chat_id) >= MAX_WAITING_PER_CHAT:
+                raise QueueFull(f"{MAX_WAITING_PER_CHAT} messages are already waiting in this chat.")
             if existing and existing["status"] == "failed":
                 db.execute("update outgoing set status = 'queued', error = '' where id = ?", (existing["id"],))
                 row = db.execute("select * from outgoing where id = ?", (existing["id"],)).fetchone()
@@ -270,6 +281,14 @@ class Store:
             db.execute("update chats set last_activity = ? where chat_id = ?", (now_iso(), chat_id))
             row = db.execute("select * from outgoing where id = ?", (cursor.lastrowid,)).fetchone()
             return self._outgoing(row), True
+
+    @staticmethod
+    def _waiting(db: sqlite3.Connection, chat_id: str) -> int:
+        return int(
+            db.execute("select count(*) from outgoing where chat_id = ? and status = 'queued'", (chat_id,)).fetchone()[
+                0
+            ]
+        )
 
     def next_queued(self) -> Outgoing | None:
         rows = self.query("select * from outgoing where status = 'queued' order by id limit 1")

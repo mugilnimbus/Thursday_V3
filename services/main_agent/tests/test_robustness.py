@@ -1,6 +1,7 @@
 """Model errors never leave a task stuck, and tasks take turns on the one model."""
 
 import json
+import shutil
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -10,7 +11,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from thursday_main_agent.application.model_call import classify_error, reply_problem
 
 Script = Callable[[list[BaseMessage]], AIMessage]
-windows_only = pytest.mark.skipif(sys.platform != "win32", reason="tool server targets Windows")
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 def call(name: str, args: dict[str, Any], n: int = 1) -> AIMessage:

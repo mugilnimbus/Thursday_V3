@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-# Placeholder until a permanent home is chosen (open decision in docs/PROJECT.md).
+# Placeholder until a permanent home is chosen.
 TASK_CONTROL_EXTENSION_URI = "https://thursday.invalid/a2a/ext/task-control/v1"
 EXTENSIONS_HEADER = "A2A-Extensions"
 

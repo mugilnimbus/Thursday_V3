@@ -9,7 +9,7 @@ The rules below are implemented, and the ones a test can check have automated te
 
 ## Trust boundaries
 
-![Trust boundaries](diagrams/trust-boundaries.svg)
+![Trust boundaries](images/trust-boundaries.svg)
 
 <details><summary>Mermaid source</summary>
 

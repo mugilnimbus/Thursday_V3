@@ -18,7 +18,7 @@ from thursday_contracts.task_control import EXTENSIONS_HEADER, TASK_CONTROL_EXTE
 from thursday_llm.providers import LoadedModel, ModelInfo
 from thursday_main_agent.bootstrap.main import MainAgentSettings, create_app
 
-TOKEN = "test-service-token"
+TOKEN = "test-token"
 Script = Callable[[list[BaseMessage]], AIMessage]
 
 

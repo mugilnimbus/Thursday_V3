@@ -1,6 +1,7 @@
 """Working data is kept for a chosen time, and a deleted chat leaves nothing in the tool server's call log."""
 
 import asyncio
+import shutil
 import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
@@ -10,7 +11,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-windows_only = pytest.mark.skipif(sys.platform != "win32", reason="tool server targets Windows")
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 def read_once(messages: list[BaseMessage]) -> AIMessage:

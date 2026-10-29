@@ -4,12 +4,15 @@ Real SDK, real ingress guard, real SQLite stores, real tool-server child process
 model is scripted. Real-model behavior is evaluated separately.
 """
 
+import shutil
 import sys
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="tool server targets Windows")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 def results(messages: list[BaseMessage]) -> list[ToolMessage]:

@@ -952,22 +952,17 @@ async def test_a_readiness_check_on_a_connection_the_agent_just_closed_is_asked_
 def test_sending_a_failed_message_again_queues_it_again(
     local: TestClient, services: Services, store: Store, agents: FakeAgents, tmp_path: Path
 ) -> None:
-    import anyio
-
     _, chat_id = make_chat(local, tmp_path)
     out, _ = store.enqueue(chat_id, "m1", "hello")
     store.set_outgoing(out.id, OutgoingStatus.FAILED, "the voice agent refused it")
     again = local.post(f"/v1/chats/{chat_id}/messages", json={"client_message_id": "m1", "text": "hello"})
     assert again.status_code == 202 and (again.json()["status"], again.json()["new"]) == ("queued", True)
-    anyio.run(services.relay.deliver_one)  # the relay's own loop may have taken it already
 
     def status() -> str:
         return store.query("select status from outgoing where id = ?", (out.id,))[0]["status"]
 
-    deadline = time.monotonic() + 5
-    while status() != "delivered" and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert status() == "delivered" and agents.turn_calls == 1, "it was sent this time, once"
+    wait_until(lambda: status() == "delivered")  # the relay's own loop sends it; a second sender here would race it
+    assert agents.turn_calls == 1, "it was sent this time, once"
     once_more = local.post(f"/v1/chats/{chat_id}/messages", json={"client_message_id": "m1", "text": "hello"})
     assert once_more.json()["new"] is False, "a delivered message is not sent twice"
 
@@ -1001,3 +996,19 @@ def test_a_very_long_task_trace_keeps_its_start_and_its_end(store: Store, servic
     assert [e["seq"] for e in events] == [1, 2, 3, 4, 5, 21, 22, 23, 24, 25] and omitted == 15
     events, omitted = services.read.task_events("t1", limit=25)
     assert len(events) == 25 and omitted == 0
+
+
+def test_a_chat_holds_at_most_100_waiting_messages(local: TestClient, tmp_path: Path, store: Store) -> None:
+    _, chat_id = make_chat(local, tmp_path)
+    for n in range(100):
+        store.enqueue(chat_id, f"m{n}", "hello")
+    refused = local.post(f"/v1/chats/{chat_id}/messages", json={"client_message_id": "extra", "text": "one too many"})
+    assert (
+        refused.status_code == 429
+        and refused.json()["code"] == "rate_limited"
+        and refused.headers["Retry-After"] == "30"
+    )
+    again = local.post(f"/v1/chats/{chat_id}/messages", json={"client_message_id": "m0", "text": "hello"})
+    assert again.status_code == 202 and again.json()["new"] is False, "a message already waiting is not refused again"
+    _, other = make_chat(local, tmp_path)
+    assert local.post(f"/v1/chats/{other}/messages", json={"client_message_id": "x", "text": "hi"}).status_code == 202

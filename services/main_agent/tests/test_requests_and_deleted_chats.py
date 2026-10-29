@@ -5,6 +5,7 @@ scripted.
 """
 
 import asyncio
+import shutil
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -16,7 +17,9 @@ from langchain_core.messages import AIMessage, BaseMessage
 from thursday_main_agent.domain.tasks import DuplicateRequest, TaskRecord
 from thursday_main_agent.infrastructure.store import Store
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="tool server targets Windows")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 def answer_once(_messages: list[BaseMessage]) -> AIMessage:

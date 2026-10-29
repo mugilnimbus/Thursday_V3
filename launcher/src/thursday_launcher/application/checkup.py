@@ -104,6 +104,7 @@ def findings(f: Facts) -> list[Finding]:
         "this system has none",
         "API keys cannot be saved. On Linux install a Secret Service such as GNOME Keyring; "
         "endpoints that need no key still work.",
+        Level.OPTIONAL,
     )
     if f.own_llamacpp_dir:
         add(

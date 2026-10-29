@@ -70,7 +70,7 @@ class FakeLlamaCpp(LlamaCppProvider):
 def folders(tmp_path: Path) -> dict[str, Path]:
     server = tmp_path / "llama"
     server.mkdir()
-    (server / "llama-server.exe").write_bytes(b"")
+    (server / ("llama-server.exe" if sys.platform == "win32" else "llama-server")).write_bytes(b"")
     models = tmp_path / "models"
     (models / "gemma").mkdir(parents=True)
     (models / "gemma" / "gemma-e4b-Q4.gguf").write_bytes(b"x" * 100)
@@ -332,7 +332,7 @@ def planned(folders, answers: list[str], load: LoadParameters, gpu: int | None =
         load=load,
         llamacpp=LlamaCppConfig(str(folders["server"]), str(folders["models"]), gpu, str(folders["logs"]), "test"),
     )
-    (folders["server"] / "llama-fit-params.exe").write_bytes(b"")
+    (folders["server"] / ("llama-fit-params.exe" if sys.platform == "win32" else "llama-fit-params")).write_bytes(b"")
     provider = PlannedLlamaCpp(config)
     provider.script = folders["script"]
     provider.runs = []

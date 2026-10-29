@@ -151,3 +151,12 @@ def test_after_everything_is_stopped_recorded_and_unrecorded_servers_go(tmp_path
     stopper = FakeStopper({222, 444}, elsewhere=[222, 444])  # 444 was started from Thursday's folder, no record
     assert stop_all(tmp_path, stopper, [tmp_path]) == 2
     assert sorted(stopper.stopped) == [222, 444]
+
+
+def test_a_missing_credential_store_is_a_note_not_a_blocker() -> None:
+    found = changed(credential_store=False)
+    level, _, fix = found["Credential store for API keys"]
+    assert level is Level.OPTIONAL and "endpoints that need no key still work" in fix
+    said: list[str] = []
+    facts = Facts(**{**{name: getattr(READY, name) for name in READY.__slots__}, "credential_store": False})  # type: ignore[arg-type]
+    assert report(findings(facts), said.append) == 0, "a headless Linux machine passes the check"

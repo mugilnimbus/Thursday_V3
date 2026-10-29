@@ -7,7 +7,7 @@ from thursday_contracts.problems import PROBLEM_MEDIA_TYPE, Problem, ProblemCode
 from thursday_gateway.application.devices import RateLimited
 from thursday_gateway.application.errors import AgentRefused, AgentUnavailable
 from thursday_gateway.application.projects import NotFound
-from thursday_gateway.domain.model import InvalidInput
+from thursday_gateway.domain.model import InvalidInput, QueueFull
 
 AGENT_CODES = {
     -32041: (409, ProblemCode.APPROVAL_ALREADY_RESOLVED),
@@ -36,6 +36,12 @@ def install_error_handlers(app: FastAPI) -> None:
     async def limited(_: Request, exc: RateLimited) -> JSONResponse:
         response = problem(429, ProblemCode.RATE_LIMITED, "Too many attempts", str(exc))
         response.headers["Retry-After"] = "60"
+        return response
+
+    @app.exception_handler(QueueFull)
+    async def queue_full(_: Request, exc: QueueFull) -> JSONResponse:
+        response = problem(429, ProblemCode.RATE_LIMITED, "Too many waiting messages", str(exc))
+        response.headers["Retry-After"] = "30"
         return response
 
     @app.exception_handler(AgentUnavailable)

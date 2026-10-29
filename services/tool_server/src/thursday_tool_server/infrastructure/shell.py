@@ -19,7 +19,12 @@ import uuid
 from thursday_tool_server.domain.shell_result import ShellResult
 
 IS_WINDOWS = sys.platform == "win32"
-_UTF8_PRELUDE = "$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+# UTF-8 in and out, and plain text only: PowerShell 7 puts colour codes around errors even when its output is a pipe.
+# Windows PowerShell 5.1 has no $PSStyle, so the guard skips it.
+_UTF8_PRELUDE = (
+    "$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+    "if ($PSStyle) { $PSStyle.OutputRendering = 'PlainText' }; "
+)
 
 
 def shell_executable() -> str:
@@ -70,7 +75,7 @@ async def kill_tree(process: asyncio.subprocess.Process) -> None:
 
 
 async def _spawn(args: list[str], cwd: pathlib.Path, stdin: int | None) -> asyncio.subprocess.Process:
-    if IS_WINDOWS:
+    if sys.platform == "win32":
         return await asyncio.create_subprocess_exec(
             *args,
             cwd=cwd,
@@ -86,6 +91,8 @@ async def _spawn(args: list[str], cwd: pathlib.Path, stdin: int | None) -> async
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
+        # Without a terminal, PowerShell on Linux still writes colour and terminal-setup codes into the output.
+        env={**os.environ, "TERM": "dumb", "NO_COLOR": "1"},
     )
 
 

@@ -9,11 +9,19 @@
 <body>
 <header class="top">
   <h1 id="title">Architecture</h1>
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" data-mode="structure" aria-selected="true" title="The system level by level: System, Containers, Components, Detail">Structure</button>
+    <button type="button" role="tab" data-mode="journeys" aria-selected="false" title="One journey, data flow, or trace, drawn alone">Journeys</button>
+    <button type="button" role="tab" data-mode="data" aria-selected="false" title="Every data item and what turns one into another">Data</button>
+  </nav>
   <nav id="crumbs" class="crumbs" aria-label="How deep the diagram is opened"></nav>
   <div class="top-actions">
     <input id="search" type="search" placeholder="Find a part  /" aria-label="Find a part">
     <button id="gaps" class="btn" type="button"></button>
-    <button id="shot" class="btn" type="button" title="Save the open level as a PNG picture">Save picture</button>
+    <button id="contract" class="btn" type="button" aria-pressed="true" title="The lines into and out of the UI. Always shown; hide them for a moment when a level gets crowded"></button>
+    <button id="theme" class="btn" type="button" title="Light, dark, or follow the system"></button>
+    <button id="svg" class="btn" type="button" title="Save what is on screen as an SVG picture (for docs/images/)">Save SVG</button>
+    <button id="shot" class="btn" type="button" title="Save what is on screen as a PNG picture">PNG</button>
     <button id="fit" class="btn" type="button" title="Switch between fitting everything on screen and actual size (0)">Actual size</button>
   </div>
 </header>
@@ -21,19 +29,35 @@
   <section class="canvas-wrap" id="wrap">
     <canvas id="canvas" tabindex="0" aria-label="Architecture diagram. Use the outline on the right to reach every part by keyboard."></canvas>
     <div class="legend" id="legend" aria-label="Connection types"></div>
-    <div class="hint" id="hint">Scroll to open one level deeper · drag or Shift + scroll to move · double-click a box to open or close it</div>
+    <div class="hint" id="hint">Scroll to open one level deeper where the pointer is · double-click a box to step inside · Backspace to step out · drag to move</div>
     <div class="zoom" role="group" aria-label="Level"><button id="zin" class="btn" type="button" aria-label="One level deeper" title="One level deeper (+)">+</button><button id="zout" class="btn" type="button" aria-label="One level up" title="One level up (-)">−</button></div>
     <div class="flowbar">
-      <label for="flow">Walk a flow</label>
+      <label for="flow">Light up a journey</label>
       <select id="flow"></select>
       <button id="prev" class="btn" type="button" aria-label="Previous step">Back</button>
       <button id="next" class="btn" type="button" aria-label="Next step">Next</button>
       <span id="step" class="step"></span>
     </div>
   </section>
+  <section class="flow-wrap" id="flowview" hidden>
+    <svg id="flowsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Flow diagram. The panel on the right lists every step."></svg>
+    <div class="legend" id="flegend" aria-label="Connection types"></div>
+    <div class="hint">Scroll to zoom where the pointer is · drag to move · click a part or a line for its details</div>
+    <div class="flowbar" id="fwalk">
+      <label for="fsel">Show</label>
+      <select id="fsel"></select>
+      <button id="fprev" class="btn" type="button" aria-label="Previous step">Back</button>
+      <button id="fnext" class="btn" type="button" aria-label="Next step">Next</button>
+      <span id="fstep" class="step"></span>
+    </div>
+  </section>
   <aside class="panel" id="panel" aria-live="polite"></aside>
 </main>
+<script src="schema.js"></script>
 <script src="model.js"></script>
+<script src="load.js"></script>
+<script src="checks.js"></script>
+<script src="flow.js"></script>
 <script src="viewer.js"></script>
 </body>
 </html>

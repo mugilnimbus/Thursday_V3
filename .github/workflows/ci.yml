@@ -1,0 +1,52 @@
+# Runs the project's own setup and checks on a clean machine at GitHub.
+#   Linux:   on every push to main.
+#   Windows: only when started by hand ("Run workflow" on the Actions tab, or
+#            gh workflow run ci.yml -f windows=true). Run it before each release.
+# A green run means a new user can follow the README's Quick start on that system.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: Also run on Windows (do this before a release)
+        type: boolean
+        default: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux always; Windows too when started by hand with "windows" ticked.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Node.js (builds the dashboard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Python (the version in .python-version)
+        run: uv python install
+
+      - name: Set up, the way a new user does
+        run: uv run --no-project python scripts/setup.py --yes
+
+      - name: Run every check
+        run: uv run python scripts/check.py
+
+# Not run here, so run these by hand before a release (README, Development):
+#   the dashboard browser tests (npm run test:e2e --prefix apps/dashboard, needs a Chromium),
+#   the Android tests and build (JDK 21 and the Android SDK),
+#   anything that needs a model server or a GPU.

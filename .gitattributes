@@ -13,3 +13,4 @@ apps/android/gradlew text eol=lf
 *.apk binary
 *.bin binary
 *.jks binary
+graphify-out/graph.json merge=graphify

@@ -39,7 +39,7 @@ from thursday_main_agent.application.runner import RunnerSettings, TaskRunner
 from thursday_main_agent.application.status import ServiceStatus
 from thursday_main_agent.application.tasks import TaskService, approval_timer
 from thursday_main_agent.infrastructure.mcp_manager import McpManager
-from thursday_main_agent.infrastructure.power import WindowsPower
+from thursday_main_agent.infrastructure.power import pick_power
 from thursday_main_agent.infrastructure.store import Store
 from thursday_main_agent.infrastructure.tool_admin import ToolServerAdmin
 from thursday_main_agent.transport.a2a import A2AServer
@@ -122,7 +122,7 @@ def create_app(
     env_path = str(env_file().resolve())
     mcp = McpManager(env_path, settings.mcp_idle_stop_minutes * 60, lambda: working.days)
     auth = ServiceTokenAuth(settings.thursday_service_token)
-    keep_awake = KeepAwake(store.open_tasks, WindowsPower(), settings.keep_awake_paused_minutes * 60)
+    keep_awake = KeepAwake(store.open_tasks, pick_power(), settings.keep_awake_paused_minutes * 60)
     behavior = BehaviorSettings(
         store,
         keep_awake,

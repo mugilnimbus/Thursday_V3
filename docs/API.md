@@ -70,7 +70,7 @@ All under `/v1` with `Authorization: Bearer <device token>`, except pairing clai
 |---|---|
 | Projects | List, create; read, rename, change folder, delete (gateway checks the folder exists) |
 | Chats | List and create per project; read, rename, delete; page through messages; search across chats |
-| Sending | `POST` a message with `client_message_id`; returns `202 {status, new, direct}` (delivered or queued); the reply arrives on the WebSocket. Sending a message that failed again, with the same id, queues it again. Whether it goes through the voice agent or straight to the main agent is decided by the chat's switch when the gateway accepts it |
+| Sending | `POST` a message with `client_message_id`; returns `202 {status, new, direct}` (delivered or queued); the reply arrives on the WebSocket. Sending a message that failed again, with the same id, queues it again. A chat holds at most 100 waiting messages: a new one beyond that is refused with `429` (code `rate_limited`, title "Too many waiting messages") and `Retry-After: 30`; a message that is already waiting is never refused again. Whether it goes through the voice agent or straight to the main agent is decided by the chat's switch when the gateway accepts it |
 | Direct switch | `PATCH /v1/chats/{id}` with `{title?, direct?}` returns `{chat_id, title, direct}` and tells every client the chat list changed. Chat lists carry `direct`; so do the messages and pending messages of a chat, and the `outgoing` stream messages |
 | Tasks and trace | Timeline after an event number; task with its trace (LLM request and response logs, tool call logs); pause, resume, stop |
 | Approvals | List pending; answer with `allow_once`, `allow_always`, or `deny` |

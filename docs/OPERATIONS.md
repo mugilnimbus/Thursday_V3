@@ -1,6 +1,6 @@
 # Operations: Setting Up, Running, and Maintaining Thursday
 
-These steps are for Windows 11. The design behind these steps is in [ARCHITECTURE.md](ARCHITECTURE.md), [FLOWS.md](FLOWS.md), and [SECURITY.md](SECURITY.md).
+These steps are for Windows 11. On Linux they are the same, with PowerShell 7 (`pwsh`) installed and `~/.local/share/thursday` as the data folder (see the README). The design behind these steps is in [ARCHITECTURE.md](ARCHITECTURE.md), [FLOWS.md](FLOWS.md), and [SECURITY.md](SECURITY.md).
 
 ## What you install
 
@@ -10,7 +10,7 @@ These steps are for Windows 11. The design behind these steps is in [ARCHITECTUR
 | Node.js 20 or newer | Building the dashboard | |
 | A model source | The two agents | LM Studio, or `.gguf` files for the built-in llama.cpp, or an OpenAI-compatible endpoint |
 | Tailscale, with HTTPS certificates enabled | The phone | Only if you use the Android app |
-| JDK 21 and the Android SDK | Building the Android app | Only if you build the APK yourself; a signed APK is in `apps/android/release/` |
+| JDK 21 and the Android SDK | Building the Android app | Only if you build the APK yourself; a signed APK is on the [releases page](https://github.com/mugilnimbus/Thursday_V3/releases/latest) |
 
 ## First setup
 
@@ -138,7 +138,7 @@ Log lines carry the chat, task, and event IDs, so one task can be followed acros
 tailscale serve --bg http://127.0.0.1:8701
 ```
 
-3. Install `apps/android/release/Thursday-1.0.0.apk` on the phone.
+3. Download `Thursday-1.0.0.apk` from the [latest release](https://github.com/mugilnimbus/Thursday_V3/releases/latest), check its SHA-256 against the README, and install it on the phone.
 4. In the dashboard open Settings, Devices and make a pairing code. Scan it with the app.
 
 A phone is removed in Settings, Devices; it is disconnected at once. If the PC's tailnet address is not detected, set `GATEWAY_PUBLIC_URL` in `.env`.
@@ -163,7 +163,7 @@ A backup holds your chats and projects (transcripts, tasks, settings, and device
 To restore:
 
 1. `uv run thursday down`.
-2. For each service folder in the backup (`gateway`, `main_agent`, `voice_agent`), copy its `.sqlite` files over the ones in `%LOCALAPPDATA%\Thursday\services\<service>\`, and delete any `-wal` and `-shm` files beside them.
+2. For each service folder in the backup (`gateway`, `main_agent`, `voice_agent`), copy its `.sqlite` files over the ones in `%LOCALAPPDATA%\Thursday\services\<service>\` (on Linux `~/.local/share/thursday/services/<service>/`, or the folder in `THURSDAY_DATA_DIR`), and delete any `-wal` and `-shm` files beside them.
 3. `uv run thursday up`.
 4. Type the API keys again in Settings if this is a different PC or Windows account.
 
@@ -193,14 +193,25 @@ What git holds comes with a clone. These do not:
 |---|---|
 | Python lint and format | `uv run ruff check .` and `uv run ruff format --check .` |
 | Python types | `uv run pyright` |
+| Set up on a new machine: tools, `.env`, packages, dashboard build, health check (safe to run again) | `python3 scripts/setup.py` |
+| Every automated check in one go: lint, types, tests, the architecture model, the dashboard checks | `python3 scripts/check.py` |
 | Python tests, including the layer rule (`tests/test_layers.py`: no import inside a service may point from an inner layer to an outer one) | `uv run pytest -q` |
 | Dashboard types | `npm run check --prefix apps/dashboard` |
 | Dashboard unit tests | `npm test --prefix apps/dashboard` |
 | Dashboard browser tests (needs a build first) | `npm run test:e2e --prefix apps/dashboard` |
 | Android tests, build, and lint (from `apps/android`, JDK 21 in `JAVA_HOME`) | `./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug` |
-| Diagrams after editing Mermaid in the pages | `node docs/diagrams/render.mjs` with `MERMAID_JS` set (see [README](README.md#diagrams)) |
+| Diagrams after editing Mermaid in the pages | `node scripts/render-diagrams.mjs` with `MERMAID_JS` set (see [Diagrams](#diagrams)) |
 
 The browser tests use Playwright's Chromium; set `THURSDAY_E2E_CHROMIUM` to a `chrome.exe` if it is not installed. After an intended change to a shared message, regenerate the committed schemas with `THURSDAY_UPDATE_SCHEMAS=1 uv run pytest contracts`.
+
+## Diagrams
+
+Each diagram is a Mermaid block whose first line is `%% svg: <name>`. In the page the block sits folded under the picture it produces:
+
+- Edit the Mermaid text, never the SVG.
+- Regenerate the pictures with `node scripts/render-diagrams.mjs` (it reads every `docs/*.md`, renders each named block with the dashboard's dark theme, and writes `docs/images/<name>.svg`). It needs Mermaid's browser bundle (`MERMAID_JS=<path to mermaid.min.js>`, version 11) and a Chromium for Playwright (`THURSDAY_E2E_CHROMIUM` if Playwright's own is not installed); neither is a dependency of this project.
+- Colours come from the `classDef` lines in each block and follow the dashboard: blue for clients, teal for the gateway, violet for the agents, green for tools, pink for speech, amber for stored data, lavender dashed for things outside Thursday, red for danger.
+- Keep labels short and avoid two labelled arrows between the same pair of boxes (use one two-way arrow), so labels never overlap. Look at the rendered picture before committing.
 
 ## Troubleshooting
 

@@ -41,7 +41,7 @@ class ChildProcess:
     async def stop(self, grace_seconds: float) -> None:
         if self._popen.poll() is None:
             with contextlib.suppress(OSError):
-                if IS_WINDOWS:
+                if sys.platform == "win32":
                     # Needs CREATE_NEW_PROCESS_GROUP; uvicorn shuts down cleanly on it.
                     os.kill(self._popen.pid, signal.CTRL_BREAK_EVENT)
                 else:
@@ -70,7 +70,7 @@ class SubprocessStarter:
             self._before_start(spec)  # for example: stop a model server the last run left behind
         # Captures anything printed before the service's own logging is configured (for example import errors).
         output = open(self._output_dir / f"{spec.name}.stdout.log", "ab")  # noqa: SIM115 - closed by ChildProcess
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         try:
             popen = subprocess.Popen(  # noqa: S603 - fixed interpreter and module name
                 [sys.executable, "-m", spec.module],

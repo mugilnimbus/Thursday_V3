@@ -1,10 +1,19 @@
+<p align="center"><img src="docs/images/logo.png" alt="Thursday logo" width="160"></p>
+
 # Thursday
 
-A personal agent harness for your own PC: a fast voice agent takes your short instructions and hands them to a main agent that carries them out with tools, with a dashboard and an Android app to watch and control it.
+**Does your local agent leave you staring at one chat box while it works?**
 
-## What problem it solves
+Thursday is a personal agent harness for your own PC. It splits the work between two agents, so you can keep talking while a task runs, and it asks you before any risky step.
 
-Running a capable local agent on your own machine usually means one chat box and a long wait. Thursday splits the work: a small, quick voice agent keeps the conversation going while a larger main agent works through your instructions step by step, asks before doing anything risky, and tells you what happened, from the PC or from your phone.
+A small, fast voice agent takes your short instructions and hands them to a main agent. The main agent carries them out with tools on your PC. A dashboard and an Android app show every step live and let you approve, pause, or stop a task.
+
+<p align="center">
+  <img src="docs/images/screen-monitor.png" alt="The Monitor screen: two graphics cards, memory, CPU and network, with everything running" width="49%">
+  <img src="docs/images/screen-tools.png" alt="The Tools screen: which tools run without asking and which ask first" width="49%">
+</p>
+
+<p align="center"><sub>The dashboard on the PC: the Monitor screen, and the Tools screen where risky tools ask first. Both are real screenshots, with a made-up project.</sub></p>
 
 ## What it does
 
@@ -16,7 +25,7 @@ Running a capable local agent on your own machine usually means one chat box and
 - Pause, resume, and stop a running task from the UI or by asking the voice agent.
 - Projects with their own folders, each holding many chats, with search and history. Deleting a chat or project removes every record of it.
 - A web dashboard on the PC and a native Android app for phones and tablets, upright or lying down, reached over Tailscale, with notifications when the device is locked.
-- Talk instead of typing: push-to-talk and replies read aloud (Kokoro) piece by piece, so the voice starts within about half a second of the reply's first words, all running locally. When the voice agent's model can hear (a built-in llama.cpp model with an audio projector), it writes down what you said itself; otherwise Whisper does, on the CPU.
+- Talk instead of typing: push-to-talk and replies read aloud (Kokoro) piece by piece, so the voice starts before the whole reply is ready, all running locally. When the voice agent's model can hear (a built-in llama.cpp model with an audio projector), it writes down what you said itself; otherwise Whisper does, on the CPU.
 - A voice field behind the chat: a line of particles that drifts like a breeze and pulses with sound, and a face made of particles that gathers while Thursday listens, thinks, and speaks (it can be switched off).
 - Monitoring: tokens per second and time to first token for each agent, context use, latency, VRAM, RAM, CPU, network, queues, and how much data is stored.
 - You choose how long working data is kept (task steps, traces, tool call logs): from 7 days to a year, or until you delete it. Chats stay until you delete them.
@@ -27,29 +36,78 @@ Running a capable local agent on your own machine usually means one chat box and
 
 You talk to the voice agent through the gateway. It turns your instruction into an A2A task for the main agent, which plans and calls tools through MCP. Progress and approval requests flow back as events to the gateway, which feeds the dashboard and the phone. Each service owns its own data; the gateway keeps a read model of events for the screens. Speech is a separate local service: the gateway has your recording transcribed and the text is sent as a normal message.
 
-![System overview](docs/diagrams/system-overview.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img alt="Thursday and what is around it: the owner, the dashboard and Android app, model servers, Tailscale, the credential store and download sources" src="docs/images/architecture.svg">
+</picture>
 
-Detailed design: [architecture](docs/ARCHITECTURE.md), [flows](docs/FLOWS.md), [contracts](docs/CONTRACTS.md), [security](docs/SECURITY.md). Running and maintaining it: [operations](docs/OPERATIONS.md).
+The picture is level 1 of the [architecture model](docs/architecture/index.html), which opens level by level down to each condition and journey.
+
+Detailed design: [architecture](docs/ARCHITECTURE.md), [flows](docs/FLOWS.md), [contracts](docs/API.md), [security](docs/SECURITY.md). Running and maintaining it: [operations](docs/OPERATIONS.md).
 
 ## How it integrates
 
 - An LLM endpoint for each agent: LM Studio on the PC, the built-in llama.cpp (downloaded by setup, serving `.gguf` files from a folder you choose), or any OpenAI-compatible service (a cloud provider, or a llama.cpp server you run yourself). A cloud provider sends everything in the model context off your PC.
-- The operating system's credential store for API keys (Windows Credential Manager).
+- The operating system's credential store for API keys (Windows Credential Manager, macOS Keychain, or Linux Secret Service).
 - MCP tool servers started as local stdio processes.
 - Tailscale for the phone connection, with HTTPS certificates enabled on your tailnet.
 - Local speech models (Whisper and Kokoro), downloaded once on first use.
 
-Contracts and integration notes are in [docs/CONTRACTS.md](docs/CONTRACTS.md).
+Contracts and integration notes are in [docs/API.md](docs/API.md).
 
 ## Requirements
 
-- A Windows 11 PC with a GPU suitable for the models you choose
+- A Windows 11 or Linux PC with a GPU suitable for the models you choose. On Linux, also install [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh`): the shell tool runs its commands in PowerShell
 - A model source: LM Studio, or `.gguf` model files for the built-in llama.cpp, or an OpenAI-compatible endpoint
 - [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 if needed)
 - Node.js 20 or newer to build the dashboard
 - Disk space: about 0.9 GB for the speech models on first use of voice, and about 650 MB for the built-in llama.cpp on a PC with an NVIDIA card (about 35 MB otherwise)
 - For the phone: Tailscale on the PC and the phone, and an Android phone (Android 11 or newer)
 - To build the Android app yourself: a JDK 21 and the Android SDK
+
+## Quick start
+
+Get the code (Code, Download or Clone, on GitHub) and open a terminal in its folder. Then:
+
+```bash
+python3 scripts/setup.py
+```
+
+On Windows, type `python scripts/setup.py`. The script checks the tools in Requirements, makes `.env` and the service token, installs the Python and dashboard packages, builds the dashboard, and checks that everything it needs is here. It asks only for the model server addresses and the models folder. Run it again at any time: it keeps your `.env` and repeats only what is needed. `python3 scripts/setup.py --yes` asks nothing and takes the example values.
+
+```bash
+uv run thursday up
+```
+
+Open http://127.0.0.1:8700, go to **Settings, Agents**, and choose a model for each agent (see [Models and API keys](#models-and-api-keys)). The built-in llama.cpp is optional and about 650 MB: `uv run thursday setup` offers it.
+
+`python3 scripts/check.py` runs every automated check: lint, types, tests, the architecture model, and the dashboard checks. The steps under Installation do the same by hand.
+
+## Configuration
+
+`.env.example` lists every setting with a comment. `.env` is yours and is never committed. Most settings can also be changed in Settings in the dashboard, and API keys are never kept in `.env`.
+
+| Setting | What it does | Default |
+|---|---|---|
+| `THURSDAY_SERVICE_TOKEN` | Lets the services trust each other. Setup makes it. | made by setup |
+| `THURSDAY_DATA_DIR` | Where databases and logs go | the per-user data folder |
+| `VOICE_LLM_PROVIDER`, `MAIN_LLM_PROVIDER` | `lmstudio`, `llamacpp`, or `openai_compatible` | `lmstudio` |
+| `VOICE_LLM_BASE_URL`, `MAIN_LLM_BASE_URL` | The model server's address | `http://localhost:1234` |
+| `LLAMACPP_MODELS_DIR` | The folder searched for `.gguf` files | empty |
+| `LLM_IDLE_UNLOAD_MINUTES` | Minutes before an idle model is unloaded; 0 keeps it loaded | 5 |
+| `GATEWAY_LOCALHOST_PORT` and the other `*_PORT` settings | The ports the services use on this PC | 8700 to 8730 |
+
+## Troubleshooting
+
+| Problem | Cause and fix |
+|---|---|
+| `setup.py` stops with "pwsh is not installed" | On Linux the shell tool needs PowerShell 7. Install it from the address the script prints, then run setup again. |
+| `setup.py` stops with "uv is not installed" or "node is not installed" | Install the tool from the address the script prints, open a new terminal, and run setup again. |
+| `uv run thursday check` shows a note about the credential store | This system has none, so API keys cannot be saved. Install a Secret Service such as GNOME Keyring on Linux. Model servers that need no key still work. |
+| `thursday up` says a service is "already running, started elsewhere" | Another Thursday is using those ports. Stop it with `uv run thursday down`, or give a second copy its own `THURSDAY_DATA_DIR` and `*_PORT` settings. |
+| A message stays queued and a banner says the LLM endpoint is unreachable | The model server is not running, or the address in Settings is wrong. Start LM Studio and its server, or fix the address. |
+
+More causes and fixes are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Installation
 
@@ -107,7 +165,9 @@ uv run thursday status
 
 Data and logs go to `%LOCALAPPDATA%\Thursday` unless `THURSDAY_DATA_DIR` is set. Updating, backups, logs, and troubleshooting are covered in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-macOS and Linux are not supported targets for version 1.
+### Linux
+
+The steps are the same as on Windows, with `python3 scripts/setup.py` as a guided first step: it checks for `pwsh` and the other tools and says what is missing. Data and logs go to `~/.local/share/thursday` unless `THURSDAY_DATA_DIR` is set. While a task runs, Thursday asks the PC not to sleep: a power request on Windows, a systemd inhibitor lock on Linux (sleep and idle, or idle alone where the session may not block sleep). Nothing is requested on macOS, which is not a supported target for version 1.
 
 ### Reaching Thursday from your phone
 
@@ -121,7 +181,7 @@ Then open Settings, Devices in the dashboard and make a pairing code. The code i
 
 ### Android app
 
-The signed APK of the current version is in this repository: [apps/android/release/Thursday-1.0.0.apk](apps/android/release/Thursday-1.0.0.apk). Copy it to a phone that is on your tailnet and install it (Android asks you to allow installing from this source the first time), open Thursday, and scan the pairing code from the dashboard. Each phone pairs separately and can be revoked in Settings, Devices.
+Download the signed APK `Thursday-1.0.0.apk` from the [latest release](https://github.com/mugilnimbus/Thursday_V3/releases/latest). Its SHA-256 is `82c1544f99d13547c1d2829e4d8314d1c1e3bbb5e021ee1a84df0eac1f67be01`. Check the file before you install it: run `sha256sum Thursday-1.0.0.apk` on Linux, or `Get-FileHash Thursday-1.0.0.apk` in Windows PowerShell, and compare the result. Copy the APK to a phone that is on your tailnet and install it (Android asks you to allow installing from this source the first time), open Thursday, and scan the pairing code from the dashboard. Each phone pairs separately and can be revoked in Settings, Devices.
 
 To build the APK yourself, from `apps/android` with a JDK 21 in `JAVA_HOME`:
 
@@ -150,13 +210,14 @@ Each agent (voice and main) has its own provider, model, and settings, changed i
 ## Status and limitations
 
 - The services, the dashboard, and the Android app work end to end on Windows 11 and Android 15 with LM Studio.
+- On Linux the Python tests (`uv run pytest`), the type check, the lint, and the dashboard tests and build pass. The shell tool's tests also pass on Linux with `pwsh` 7.6 installed. The five services also start and stay healthy on Linux, and the dashboard is served; a project, a chat and a queued message (with no model server running) behave as designed, and the monitor reports CPU, RAM and both GPUs. A task run with a real model, speech, the browser UI, and the Android app have not been tried on Linux.
 - The built-in llama.cpp has been run on a PC with two NVIDIA cards (CUDA build, Gemma 4 E4B and 12B): install, model list, load and unload on a chosen GPU, text, tool calls, and a spoken question through Whisper to the voice agent and on to the main agent. The Vulkan and CPU builds have not been run.
 - Voice is push-to-talk with replies read aloud, on the dashboard and the phone; the first use downloads the speech models (about 0.5 GB for Whisper `small` and 0.35 GB for Kokoro). Continuous listening is not built. A model that hears writes down what you said and then answers that text; it does not answer the audio in one step.
 - Across several graphics cards, llama.cpp splits a model by layer (the cards work one after the other). Its two parallel split modes do not load on NVIDIA cards in the build setup installs, so they are not offered.
 - OpenAI's server-side context compaction is not used; Thursday summarises with the model itself.
 - On the phone the speaking face moves to a speech-like pattern, not the actual audio; on the dashboard it follows the audio.
-- Restoring from a backup has not been tried end to end.
-- Windows and Android are the supported targets for version 1.
+- Restoring a backup was tried on Linux with a project and a chat: both came back with their original ids. Message and task contents were not compared.
+- Windows 11, Linux, and Android are the supported targets for version 1. macOS is not.
 
 ## Project structure
 
@@ -171,7 +232,7 @@ thursday/
 ├── .python-version              Python 3.12
 ├── .env.example                 every setting with example values; copied to .env by setup (never committed)
 ├── .gitignore  .gitattributes   what git leaves out; line endings and binary files
-├── thursday_logo.png            the logo (the apps carry resized copies)
+├── scripts/                     setup.py and check.py (guided setup), render-diagrams.mjs
 │
 ├── contracts/                   the messages services send each other (shared)
 │   ├── src/thursday_contracts/      event envelope, approvals, health, metrics, problems, task control
@@ -220,13 +281,12 @@ thursday/
 │       │   ├── security/            fingerprint or PIN checks
 │       │   └── voice/               push-to-talk recording and spoken replies
 │       ├── app/src/main/assets/     the voice field's face data
-│       ├── app/src/test/            unit tests
-│       └── release/                 the signed APK, ready to install
+│       └── app/src/test/            unit tests
 │
 └── docs/                        the design, in pages
-    ├── README.md                    index of the pages and how diagrams are made
-    ├── PROJECT.md  ARCHITECTURE.md  FLOWS.md  CONTRACTS.md  SECURITY.md  OPERATIONS.md
-    └── diagrams/                    the pictures (generated from the Mermaid in the pages by render.mjs)
+    ├── ARCHITECTURE.md  FLOWS.md  API.md  SECURITY.md  OPERATIONS.md
+    ├── architecture/                the architecture model and its viewer
+    └── images/                      the logo and the pictures (generated from the Mermaid in the pages by scripts/render-diagrams.mjs)
 ```
 
 ### What `contracts/` is for
@@ -235,7 +295,7 @@ Services must not import each other's code, yet they have to agree exactly on th
 
 - It defines the event envelope (what the agents send the gateway, with its ID and per-source order), the approval request and answer, health and readiness reports, the metrics sample, the problem format for errors, and the constants of the pause and resume extension.
 - `contracts/schemas/` holds a JSON Schema of every message. A test compares each message with its committed schema, so a message cannot change by accident. After an intended, versioned change, regenerate them with `THURSDAY_UPDATE_SCHEMAS=1 uv run pytest contracts` and commit the result.
-- Breaking changes need a new `schema_version` (events), a new extension URI, or a new REST prefix, as set out in [docs/CONTRACTS.md](docs/CONTRACTS.md), which also describes how the services use these messages.
+- Breaking changes need a new `schema_version` (events), a new extension URI, or a new REST prefix, as set out in [docs/API.md](docs/API.md), which also describes how the services use these messages.
 
 ### Created on your machine, not in the repository
 
@@ -251,7 +311,8 @@ Services must not import each other's code, yet they have to agree exactly on th
 
 ## Documentation
 
-- [Design documents](docs/README.md)
+- [Architecture](docs/ARCHITECTURE.md), [flows](docs/FLOWS.md), [API](docs/API.md), [security](docs/SECURITY.md)
+- [Architecture model](docs/architecture/index.html)
 - [Operations: setting up, updating, backing up, and troubleshooting](docs/OPERATIONS.md)
 
 ## License

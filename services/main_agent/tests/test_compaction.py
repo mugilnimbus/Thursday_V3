@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 import sys
 
@@ -19,7 +20,9 @@ def test_nothing_to_cut_returns_none() -> None:
 
 
 GOOD_SUMMARY = "SUMMARY: the agent read big.txt several times; it has 400 lines and nothing else needs doing."
-windows_only = pytest.mark.skipif(sys.platform != "win32", reason="tool server targets Windows")
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 def is_summary_request(messages: list[BaseMessage]) -> bool:

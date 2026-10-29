@@ -55,6 +55,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S"]
+"scripts/**" = ["S603", "E731", "E501"]  # generic guided-setup files: run fixed commands, no outside input
 
 [tool.pyright]
 pythonVersion = "3.12"

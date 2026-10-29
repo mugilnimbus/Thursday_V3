@@ -1,5 +1,6 @@
 """The tool server as a real child process over stdio, as the main agent runs it."""
 
+import shutil
 import sys
 from typing import Any
 
@@ -8,7 +9,9 @@ from mcp.client.client import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp_types import ElicitResult, InputRequiredResult
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="shell tools target Windows PowerShell")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 async def no_auto(context: Any, params: Any) -> Any:

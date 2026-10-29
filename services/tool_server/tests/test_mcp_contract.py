@@ -1,5 +1,6 @@
 """The MCP contract the main agent relies on, exercised through a real MCP client (in-process)."""
 
+import shutil
 import sqlite3
 import sys
 from typing import Any, Literal
@@ -10,7 +11,9 @@ from mcp_types import ElicitResult, InputRequiredResult
 from thursday_tool_server.bootstrap.main import ToolServerSettings, build
 from thursday_tool_server.domain.policy import POLICY, Decision
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="shell tools target Windows PowerShell")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32" and shutil.which("pwsh") is None, reason="the shell tools need Windows or pwsh"
+)
 
 
 async def refuse_auto_elicitation(context, params):
