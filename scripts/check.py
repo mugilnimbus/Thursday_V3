@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECKS = [
     ("Lint", ["uv", "run", "ruff", "check", "."]),
     ("Types", ["uv", "run", "pyright"]),
+    # The same type check as Windows, so Windows-only problems show before CI runs.
+    ("Types as Windows", ["uv", "run", "pyright", "--pythonplatform", "Windows"]),
     ("Tests", ["uv", "run", "pytest", "-q"]),
     ("Architecture model", ["node", "docs/architecture/check.mjs"]),
     ("Dashboard types", ["npm", "run", "check", "--prefix", "apps/dashboard"]),

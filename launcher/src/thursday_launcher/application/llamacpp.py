@@ -23,6 +23,7 @@ _CUDA = re.compile(r"^cuda-(\d+)\.(\d+)$")
 _SYSTEMS = {"win32": "win", "linux": "ubuntu", "darwin": "macos"}
 _ARCHES = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}
 SERVER_NAMES = ("llama-server.exe", "llama-server")
+RUNTIME_PREFIXES = ("libcudart", "libcublas", "cudart", "cublas")  # the CUDA runtime, from the `cudart-` archive
 RECORD = "installed.json"
 
 
@@ -94,6 +95,17 @@ def installed(root: Path) -> dict | None:
     return record if any(next(folder.rglob(name), None) for name in SERVER_NAMES) else None
 
 
+def _runtime_beside_server(folder: Path) -> None:
+    """Move the CUDA runtime next to `llama-server`. The CUDA backend looks for it only in its own folder, and the
+    Linux archives unpack into one folder each; without this move llama.cpp finds no GPU and runs on the CPU."""
+    server = next((p for name in SERVER_NAMES for p in folder.rglob(name)), None)
+    if server is None:
+        return
+    for library in [p for p in folder.rglob("*") if p.is_file() and p.name.startswith(RUNTIME_PREFIXES)]:
+        if library.parent != server.parent:
+            library.replace(server.parent / library.name)
+
+
 def _unpack(archive: Path, into: Path) -> None:
     into.mkdir(parents=True, exist_ok=True)
     base = into.resolve()
@@ -125,6 +137,7 @@ def install(
     """`confirm` is asked once, with what would be downloaded and how large it is; a no installs nothing."""
     have = installed(root)
     if have is not None and not update:
+        _runtime_beside_server(root / str(have["folder"]))  # repairs a build installed before this move existed
         say(f"llama.cpp {have['tag']} ({have['kind']}) is already installed")
         return
     release = source.latest()
@@ -148,6 +161,7 @@ def install(
             archive = downloads / asset.name
             source.download(asset, archive, _percent(asset, say))
             _unpack(archive, folder)
+        _runtime_beside_server(folder)
         if not any(next(folder.rglob(name), None) for name in SERVER_NAMES):
             raise InstallError("The downloaded build has no llama-server in it.")
     except BaseException:

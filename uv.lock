@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "thursday",
+    "thursday-bench",
     "thursday-contracts",
     "thursday-gateway",
     "thursday-launcher",
@@ -2325,6 +2326,7 @@ name = "thursday"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "thursday-bench" },
     { name = "thursday-contracts" },
     { name = "thursday-gateway" },
     { name = "thursday-launcher" },
@@ -2347,6 +2349,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "thursday-bench", editable = "bench" },
     { name = "thursday-contracts", editable = "contracts" },
     { name = "thursday-gateway", editable = "services/gateway" },
     { name = "thursday-launcher", editable = "launcher" },
@@ -2365,6 +2368,27 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=1" },
     { name = "ruff", specifier = ">=0.13" },
+]
+
+[[package]]
+name = "thursday-bench"
+version = "0.1.0"
+source = { editable = "bench" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "psutil" },
+    { name = "uvicorn" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "psutil", specifier = ">=7" },
+    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "websockets", specifier = ">=14" },
 ]
 
 [[package]]

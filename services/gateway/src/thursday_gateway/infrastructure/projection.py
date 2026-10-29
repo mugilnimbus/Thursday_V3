@@ -78,6 +78,17 @@ def project_event(db: sqlite3.Connection, pos: int, e: EventEnvelope) -> None:
     elif e.type in (EventType.USER_MESSAGE, EventType.ASSISTANT_MESSAGE) and e.chat_id:
         role = "user" if e.type is EventType.USER_MESSAGE else "assistant"
         client_id = p.get("client_message_id")
+        # A voice agent stopped mid-answer publishes the user message again when it retries the turn.
+        # The event log keeps both events; the chat shows the message once.
+        if (
+            role == "user"
+            and client_id
+            and db.execute(
+                "select 1 from messages where chat_id = ? and role = 'user' and client_message_id = ?",
+                (e.chat_id, client_id),
+            ).fetchone()
+        ):
+            return
         db.execute(
             "insert into messages (chat_id, role, text, client_message_id, pos, created_at, direct) "
             "values (?,?,?,?,?,?,?)",
@@ -91,8 +102,3 @@ def project_event(db: sqlite3.Connection, pos: int, e: EventEnvelope) -> None:
                 int(role == "user" and bool(p.get("direct"))),
             ),
         )
-        if role == "user" and client_id:
-            db.execute(
-                "update outgoing set status = 'delivered' where chat_id = ? and client_message_id = ?",
-                (e.chat_id, client_id),
-            )

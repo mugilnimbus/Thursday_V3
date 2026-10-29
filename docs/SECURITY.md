@@ -1,5 +1,15 @@
 # Important Security Boundaries
 
+## Reporting a vulnerability
+
+Do not open a public issue for a security problem. Report it in private:
+
+1. Open the **Security** tab of this repository on GitHub.
+2. Choose **Report a vulnerability**.
+3. Describe what you found, the steps that show it, and the version you used.
+
+Only the maintainer can read the report. GitHub provides this private channel.
+
 The rules below are implemented, and the ones a test can check have automated tests (listener guard, device tokens and pairing limits, workspace sandbox, approvals, file views, key storage per provider, the llama.cpp download checks). There has been no independent security review.
 
 ## Assets and actors

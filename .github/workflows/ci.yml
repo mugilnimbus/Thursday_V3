@@ -1,27 +1,30 @@
 # Runs the project's own setup and checks on a clean machine at GitHub.
-#   Linux:   on every push to main.
-#   Windows: only when started by hand ("Run workflow" on the Actions tab, or
-#            gh workflow run ci.yml -f windows=true). Run it before each release.
+# It runs only when the owner starts it: "Run workflow" on the Actions tab, or
+#   gh workflow run ci.yml -f os=both
+# A push never starts it. Run it with "both" once before each release.
 # A green run means a new user can follow the README's Quick start on that system.
 name: CI
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
-      windows:
-        description: Also run on Windows (do this before a release)
-        type: boolean
-        default: true
+      os:
+        description: Which systems to run on
+        type: choice
+        options: [both, linux, windows]
+        default: both
+
+# A new run cancels an older run on the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
     strategy:
       fail-fast: false
       matrix:
-        # Linux always; Windows too when started by hand with "windows" ticked.
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(inputs.os == 'linux' && '["ubuntu-latest"]' || inputs.os == 'windows' && '["windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
 

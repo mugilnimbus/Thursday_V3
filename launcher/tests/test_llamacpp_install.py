@@ -124,6 +124,38 @@ def test_install_downloads_checks_and_unpacks_the_build_and_its_runtime_together
     assert len(source.downloaded) == 2 and "already installed" in said[-1], "a second setup downloads nothing"
 
 
+def tarred(files: dict[str, bytes]) -> bytes:
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as bundle:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            bundle.addfile(info, io.BytesIO(data))
+    return out.getvalue()
+
+
+def test_on_linux_the_cuda_runtime_is_moved_next_to_the_server_so_the_gpu_is_found(tmp_path: Path) -> None:
+    # The real Linux archives unpack into one folder each, and libggml-cuda.so looks only in its own folder.
+    source = FakeReleases(
+        "b9",
+        {
+            "llama-b9-bin-ubuntu-cuda-12.8-x64.tar.gz": tarred(
+                {"llama-b9/llama-server": b"server", "llama-b9/libggml-cuda.so": b"cuda"}
+            ),
+            "cudart-llama-b9-bin-ubuntu-cuda-12.8-x64.tar.gz": tarred(
+                {"cudart-llama-b9/libcudart.so.12": b"rt", "cudart-llama-b9/libcublas.so.12": b"blas"}
+            ),
+        },
+    )
+    install(source, tmp_path, "linux", "x86_64", True, lambda _: None)
+    server_dir = tmp_path / "b9-cuda-12.8" / "llama-b9"
+    assert (server_dir / "libcudart.so.12").read_bytes() == b"rt" and (server_dir / "libcublas.so.12").exists()
+
+    (server_dir / "libcudart.so.12").replace(tmp_path / "b9-cuda-12.8" / "cudart-llama-b9" / "libcudart.so.12")
+    install(source, tmp_path, "linux", "x86_64", True, lambda _: None)
+    assert (server_dir / "libcudart.so.12").exists(), "setup again repairs a build installed the old way"
+
+
 def test_update_replaces_the_old_build_only_when_there_is_a_newer_one(tmp_path: Path) -> None:
     said: list[str] = []
     install(windows_release("b9"), tmp_path, "win32", "AMD64", True, said.append)

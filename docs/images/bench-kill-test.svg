@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="430" viewBox="0 0 800 430" role="img" aria-label="Killing the voice agent in the middle of a conversation">
+<title>Killing the voice agent in the middle of a conversation</title>
+<defs><linearGradient id="bg-light" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f4f1fb"/></linearGradient><linearGradient id="flow-light" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2563eb"/><stop offset="0.55" stop-color="#6d3fd6"/><stop offset="1" stop-color="#0d9488"/></linearGradient><filter id="glow-light" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<rect x="0.5" y="0.5" width="799" height="429" rx="14" fill="url(#bg-light)" stroke="#e2dcf0"/>
+<rect x="28" y="26" width="4" height="16" rx="2" fill="#0d9488"/>
+<text x="40.0" y="39.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#0d9488" text-anchor="start" letter-spacing="1.4">CRASH TEST</text>
+<text x="28.0" y="68.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#14112a" text-anchor="start">Killing an agent loses nothing</text>
+<text x="28.0" y="92.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#4a4560" text-anchor="start">5 chats talk for 60 s. At 40 s the voice agent is killed without warning.</text>
+<text x="28.0" y="111.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#4a4560" text-anchor="start">Each mark is one run. Did every message still get its answer?</text>
+<rect x="28" y="128" width="340" height="178" rx="12" fill="#d03b3b" fill-opacity="0.08" stroke="#d03b3b" stroke-opacity="0.45"/>
+<text x="48.0" y="156.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#d03b3b" text-anchor="start" letter-spacing="1.2">BEFORE THE FIX</text>
+<text x="48.0" y="206.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="52" font-weight="800" fill="#d03b3b" text-anchor="start">5</text>
+<text x="85.0" y="206.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="700" fill="#4a4560" text-anchor="start">/ 15</text>
+<text x="48.0" y="228.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#14112a" text-anchor="start">runs lost a message</text>
+<circle cx="58.0" cy="256.0" r="10" fill="#d03b3b"/>
+<path d="M54.0,252.0 l8.0,8.0 M62.0,252.0 l-8.0,8.0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="87.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M83.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="116.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M112.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="145.0" cy="256.0" r="10" fill="#d03b3b"/>
+<path d="M141.0,252.0 l8.0,8.0 M149.0,252.0 l-8.0,8.0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="174.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M169.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="203.0" cy="256.0" r="10" fill="#d03b3b"/>
+<path d="M199.0,252.0 l8.0,8.0 M207.0,252.0 l-8.0,8.0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="232.0" cy="256.0" r="10" fill="#d03b3b"/>
+<path d="M228.0,252.0 l8.0,8.0 M236.0,252.0 l-8.0,8.0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="261.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M256.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="290.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M285.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="319.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M314.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="58.0" cy="283.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M54.0,283.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="87.0" cy="283.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M83.0,283.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="116.0" cy="283.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M112.0,283.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="145.0" cy="283.0" r="10" fill="#d03b3b"/>
+<path d="M141.0,279.0 l8.0,8.0 M149.0,279.0 l-8.0,8.0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="174.0" cy="283.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M169.9,283.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="432" y="128" width="340" height="178" rx="12" fill="#15803d" fill-opacity="0.08" stroke="#15803d" stroke-opacity="0.45"/>
+<text x="452.0" y="156.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#15803d" text-anchor="start" letter-spacing="1.2">AFTER THE FIX</text>
+<text x="452.0" y="206.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="52" font-weight="800" fill="#15803d" text-anchor="start">0</text>
+<text x="489.0" y="206.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="700" fill="#4a4560" text-anchor="start">/ 8</text>
+<text x="452.0" y="228.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#14112a" text-anchor="start">runs lost a message</text>
+<circle cx="462.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M457.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="491.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M486.9,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="520.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M516.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="549.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M545.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="578.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M574.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="607.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M603.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="636.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M632.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="665.0" cy="256.0" r="9" fill="none" stroke="#15803d" stroke-width="2"/>
+<path d="M661.0,256.0 l3.0,3.0 l5.0,-5.9" stroke="#15803d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="400" cy="217" r="18" fill="#ffffff" stroke="#e2dcf0"/>
+<path d="M392,217 h14 m-6,-6 l6,6 l-6,6" stroke="#14112a" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="28" y="326" width="744" height="76" rx="10" fill="#0d9488" fill-opacity="0.10"/>
+<rect x="28" y="326" width="4" height="76" rx="2" fill="#0d9488"/>
+<text x="46.0" y="348.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="800" fill="#0d9488" text-anchor="start" letter-spacing="1.3">WHAT THIS MEANS</text>
+<text x="46.0" y="370.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#14112a" text-anchor="start">This test found a real bug: a late event from the restarted agent marked a waiting message as</text>
+<text x="46.0" y="389.0" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#14112a" text-anchor="start">delivered, so it was never sent again. Fix: only the sender marks a message delivered, with a test.</text>
+</svg>

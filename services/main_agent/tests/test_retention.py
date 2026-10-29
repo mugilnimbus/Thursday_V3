@@ -68,8 +68,8 @@ async def test_a_finished_tasks_working_data_goes_after_the_period_and_the_chat_
     assert events_before > 0
 
     async with start(read_once) as h:  # the clean-up runs when the service starts, then every hour
-        for _ in range(100):
-            if not rows(data / "checkpoints.sqlite", "select 1 from checkpoints where thread_id = ?", (task_id,)):
+        for _ in range(100):  # wait for the last step of the clean-up, which marks the task cleared
+            if rows(data / "main_agent.sqlite", "select cleared from task_ends")[0][0] == 1:
                 break
             await asyncio.sleep(0.1)
         assert not rows(data / "checkpoints.sqlite", "select 1 from checkpoints where thread_id = ?", (task_id,))

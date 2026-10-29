@@ -14,6 +14,7 @@ dependencies = [
     "thursday-tool-server",
     "thursday-llm",
     "thursday-speech",
+    "thursday-bench",
 ]
 
 [dependency-groups]
@@ -28,7 +29,7 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["contracts", "packages/*", "services/*", "launcher"]
+members = ["contracts", "packages/*", "services/*", "launcher", "bench"]
 
 [tool.uv.sources]
 thursday-contracts = { workspace = true }
@@ -41,6 +42,7 @@ thursday-metrics-collector = { workspace = true }
 thursday-tool-server = { workspace = true }
 thursday-llm = { workspace = true }
 thursday-speech = { workspace = true }
+thursday-bench = { workspace = true }
 
 [tool.ruff]
 line-length = 120
@@ -60,11 +62,11 @@ ignore = [
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
-include = ["contracts", "packages", "services", "launcher"]
+include = ["contracts", "packages", "services", "launcher", "bench"]
 exclude = ["**/.venv", "**/__pycache__"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["contracts", "packages", "services", "launcher", "tests"]
+testpaths = ["contracts", "packages", "services", "launcher", "bench", "tests"]
 addopts = "--import-mode=importlib"

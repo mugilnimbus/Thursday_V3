@@ -816,6 +816,38 @@ def test_direct_user_messages_are_marked_in_the_stored_chat(local: TestClient, t
     assert [(r["role"], r["direct"]) for r in rows] == [("user", True), ("user", False), ("assistant", False)]
 
 
+def test_a_user_message_published_again_after_a_stop_is_shown_once_and_kept_in_the_log(
+    local: TestClient, tmp_path: Path
+) -> None:
+    _, chat_id = make_chat(local, tmp_path)
+    ingest(
+        local,
+        event(1, "user_message", {"text": "hello", "client_message_id": "a"}, chat_id, None, "voice"),
+        event(2, "user_message", {"text": "hello", "client_message_id": "a"}, chat_id, None, "voice"),
+        event(3, "assistant_message", {"text": "Hi."}, chat_id, None, "voice"),
+        event(4, "user_message", {"text": "hello", "client_message_id": "b"}, chat_id, None, "voice"),
+    )
+    rows = local.get(f"/v1/chats/{chat_id}/messages").json()["messages"]
+    assert [(r["role"], r["client_message_id"]) for r in rows] == [("user", "a"), ("assistant", None), ("user", "b")]
+    timeline = local.get(f"/v1/chats/{chat_id}/timeline").json()["events"]
+    assert [e["event"]["type"] for e in timeline].count("user_message") == 3, "the event log keeps every event"
+
+
+def test_a_message_cut_off_by_a_stopped_voice_agent_is_sent_again_after_its_late_user_message_event(
+    local: TestClient, agents: FakeAgents, tmp_path: Path
+) -> None:
+    _, chat_id = make_chat(local, tmp_path)
+    agents.voice_up = False  # the turn was cut off: the relay keeps the message queued
+    local.post(f"/v1/chats/{chat_id}/messages", json={"client_message_id": "m1", "text": "hello"})
+    time.sleep(0.3)
+    # the restarted agent's outbox now delivers the user_message it published before it was stopped
+    ingest(local, event(1, "user_message", {"text": "hello", "client_message_id": "m1"}, chat_id, None, "voice"))
+    assert [p["status"] for p in pending_of(local, chat_id)] == ["queued"], "not answered, so still queued"
+    agents.voice_up = True
+    wait_until(lambda: pending_of(local, chat_id) == [])
+    assert agents.turn_calls == 1
+
+
 def test_a_database_from_before_direct_mode_is_upgraded_in_place(tmp_path: Path) -> None:
     import sqlite3
 
